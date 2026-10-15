@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # Database Service (PostgreSQL)
+  postgres:
+    image: postgres:16-alpine
+    container_name: brewlite-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-brewlite_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-brewlite_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-brewlite_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - brewlite-network
+
+  # Backend Service (NestJS REST API)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brewlite-backend
+    restart: always
+    depends_on:
+      - postgres
+    environment:
+      NODE_ENV: development
+      PORT: ${BACKEND_PORT:-4000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-brewlite_admin}:${POSTGRES_PASSWORD:-brewlite_secure_password}@postgres:5432/${POSTGRES_DB:-brewlite_db}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_for_brewlite_2026}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-7d}
+    ports:
+      - "${BACKEND_PORT:-4000}:4000"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    networks:
+      - brewlite-network
+
+  # Frontend Service (Next.js)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: brewlite-frontend
+    restart: always
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: http://localhost:4000/api
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - brewlite-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  brewlite-network:
+    driver: bridge

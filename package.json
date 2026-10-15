@@ -1,0 +1,29 @@
+{
+  "name": "brewlite-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BrewLite - Cashless Coffee Ordering Application (Agile Scrum)",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=frontend & npm run start:dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "dev:backend": "npm run start:dev --workspace=backend",
+    "build": "npm run build --workspace=backend && npm run build --workspace=frontend",
+    "test": "npm run test --workspace=backend",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down"
+  },
+  "keywords": [
+    "brewlite",
+    "nextjs",
+    "nestjs",
+    "agile",
+    "scrum",
+    "monorepo"
+  ],
+  "author": "BrewLite Team - Trường Đại học Sài Gòn",
+  "license": "UNLICENSED"
+}
