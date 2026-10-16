@@ -1,21 +1,37 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-brew-50: #fcf8f2;
+  --color-brew-100: #f7eee0;
+  --color-brew-200: #edd8bc;
+  --color-brew-300: #e0bc91;
+  --color-brew-400: #d19962;
+  --color-brew-500: #b8773c;
+  --color-brew-600: #9b5b2e;
+  --color-brew-700: #7c4427;
+  --color-brew-800: #673824;
+  --color-brew-900: #562f21;
+  --color-brew-950: #30170f;
+}
+
+/* Xóa hết tất cả các cấu hình Dark Mode (@media (prefers-color-scheme: dark)) nếu có */
 
 :root {
   --foreground-rgb: 48, 23, 15;
-  --background-start-rgb: 252, 248, 242;
-  --background-end-rgb: 247, 238, 224;
+  --background-start-rgb: 252, 248, 242; /* fcf8f2 */
+  --background-end-rgb: 247, 238, 224; /* f7eee0 */
 }
 
 body {
-  color: rgb(var(--foreground-rgb));
+  color: rgb(var(--foreground-rgb)) !important;
+  /* Ép buộc nền gradient luôn luôn hiển thị */
   background: linear-gradient(
       to bottom,
-      transparent,
+      rgb(var(--background-start-rgb)),
       rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+    ) !important;
   min-height: 100vh;
+  /* Thêm dòng này để fix lỗi viền đen của Dark Mode Tailwind v4 */
+  background-color: transparent !important;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
