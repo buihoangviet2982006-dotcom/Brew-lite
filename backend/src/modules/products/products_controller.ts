@@ -1,6 +1,6 @@
 import { Controller, Get, Param, Query, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ProductsService } from './products_service';
-import { GetProductsQueryDto, ProductResponseDto } from './dto/products_dto';
+import { GetProductsQueryDto, ProductDetailResponseDto, ProductResponseDto } from './dto/products_dto';
 
 @Controller('products')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
@@ -13,7 +13,7 @@ export class ProductsController {
   }
 
   @Get(':id')
-  async getProductById(@Param('id') id: string): Promise<ProductResponseDto> {
+  async getProductById(@Param('id') id: string): Promise<ProductDetailResponseDto> {
     return this.productsService.findOne(id);
   }
 }
