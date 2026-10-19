@@ -1,4 +1,4 @@
-import { IsEnum, IsNumber, IsOptional, Min } from 'class-validator';
+import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export enum ProductCategory {
@@ -16,15 +16,15 @@ export class ProductResponseDto {
     description?: string;
     category: ProductCategory;
     isPopular?: boolean;
-    createdAt?: String;
+    createdAt?: string;
 }
 export class GetProductsQueryDto {
     @IsOptional()
-    @IsEnum(ProductCategory, { message: 'Danh muc phai la coffe, tea, special hoac bakery' })
+    @IsEnum(ProductCategory, { message: 'Danh mục phải là coffee, tea, special hoặc bakery' })
     category?: ProductCategory;
 
     @IsOptional()
-    @IsEnum(ProductCategory, { message: 'Tu khoa tim kiem phai la chuoi' })
+    @IsString({ message: 'Từ khóa tìm kiếm phải là chuỗi' })
     search?: string;
 
     @IsOptional()
