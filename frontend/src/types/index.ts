@@ -1,6 +1,17 @@
 // TypeScript types for BrewLite
 
-export type ProductSize = 'S' | 'M' | 'L';
+export type ProductSize = 'S' | 'M' | 'L' | string;
+
+export interface ProductSizeItem {
+  size: string;
+  price: number;
+}
+
+export interface ToppingItem {
+  id: string;
+  name: string;
+  price: number;
+}
 
 export interface Product {
   id: string;
@@ -9,6 +20,13 @@ export interface Product {
   imageUrl: string;
   stock: number;
   description?: string;
+  category?: 'coffee' | 'tea' | 'special' | 'bakery' | string;
+  sizes?: ProductSizeItem[];
+  isAvailable?: boolean;
+}
+
+export interface ProductDetail extends Product {
+  availableToppings: ToppingItem[];
 }
 
 export interface CartItem {
@@ -33,8 +51,11 @@ export type OrderStatus =
 
 export interface Order {
   id: string;
+  orderNumber?: string;
   userId: string;
   status: OrderStatus;
+  subtotal?: number;
+  discountAmount?: number;
   total: number;
   createdAt: string;
   items?: CartItem[];
@@ -44,5 +65,7 @@ export interface User {
   id: string;
   email: string;
   fullName?: string;
+  role?: 'CUSTOMER' | 'BARISTA' | 'ADMIN';
   loyaltyPoints: number;
 }
+
