@@ -1,0 +1,97 @@
+"use client";
+
+import { useState } from "react";
+import { useAuth } from "@/store/useAuth";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { Coffee } from "lucide-react";
+
+export default function LoginPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  
+  const login = useAuth((state) => state.login);
+  const router = useRouter();
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+
+    // Tài khoản test mẫu (hoặc tài khoản vừa đăng ký lưu trong localStorage)
+    const registeredUserStr = localStorage.getItem("registeredUser");
+    const registeredUser = registeredUserStr ? JSON.parse(registeredUserStr) : null;
+
+    if (email === "test@brewlite.com" && password === "123456") {
+      login(
+        { id: "u1", email: "test@brewlite.com", fullName: "Thành Viên 3", loyaltyPoints: 150 },
+        "jwt-mock-token-brewlite-123"
+      );
+      router.push("/");
+    } else if (registeredUser && registeredUser.email === email && registeredUser.password === password) {
+      login(
+        { id: "u2", email: registeredUser.email, fullName: registeredUser.fullName, loyaltyPoints: 0 },
+        "jwt-mock-token-brewlite-456"
+      );
+      router.push("/");
+    } else {
+      setError("Email hoặc mật khẩu không chính xác! (Thử: test@brewlite.com / 123456)");
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[80vh] p-5">
+      <div className="w-16 h-16 bg-brew-500 rounded-2xl flex items-center justify-center shadow-lg mb-6">
+        <Coffee className="w-8 h-8 text-white" />
+      </div>
+      <h2 className="text-2xl font-extrabold text-brew-950 mb-1">Chào mừng trở lại</h2>
+      <p className="text-sm text-brew-600 mb-6">Đăng nhập vào BrewLite để đặt món</p>
+
+      <form onSubmit={handleLogin} className="w-full max-w-sm space-y-4">
+        {error && (
+          <div className="p-3 bg-red-50 border border-red-200 text-red-600 rounded-xl text-xs font-medium text-center">
+            {error}
+          </div>
+        )}
+
+        <div>
+          <label className="block text-sm font-bold text-brew-900 mb-1">Email</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full p-3.5 rounded-xl border border-brew-200 focus:outline-none focus:border-brew-600"
+            placeholder="test@brewlite.com"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-bold text-brew-900 mb-1">Mật khẩu</label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full p-3.5 rounded-xl border border-brew-200 focus:outline-none focus:border-brew-600"
+            placeholder="••••••••"
+            required
+          />
+        </div>
+
+        <button
+          type="submit"
+          className="w-full bg-brew-600 text-white py-3.5 rounded-xl font-bold text-base hover:bg-brew-700 active:scale-95 transition-all shadow-md mt-4"
+        >
+          Đăng nhập
+        </button>
+      </form>
+
+      <p className="mt-6 text-sm text-brew-600">
+        Chưa có tài khoản?{" "}
+        <Link href="/register" className="font-bold text-brew-800 hover:underline">
+          Đăng ký ngay
+        </Link>
+      </p>
+    </div>
+  );
+}
