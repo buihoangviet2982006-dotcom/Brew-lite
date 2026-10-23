@@ -5,37 +5,59 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Coffee } from "lucide-react";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+
 export default function RegisterPage() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const router = useRouter();
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-
-    if (password.length < 6) {
-      setError("Mật khẩu phải có ít nhất 6 ký tự!");
-      return;
-    }
 
     if (password !== confirmPassword) {
       setError("Mật khẩu xác nhận không khớp!");
       return;
     }
 
-    // Lưu tạm thông tin đăng ký để test ngay với trang Login
-    localStorage.setItem(
-      "registeredUser",
-      JSON.stringify({ fullName, email, password })
-    );
+    setLoading(true);
 
-    alert("Đăng ký thành công! Vui lòng đăng nhập.");
-    router.push("/login");
+    try {
+      // Payload đã loại bỏ trường 'name' thừa để tránh lỗi ValidationPipe từ NestJS
+      const payload = {
+        email: email.trim(),
+        password: password,
+        fullName: fullName.trim(),
+      };
+
+      const res = await fetch(`${API_BASE_URL}/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (Array.isArray(data.message)) {
+          throw new Error(data.message.join(" | "));
+        }
+        throw new Error(data.message || "Đăng ký không thành công!");
+      }
+
+      alert("Đăng ký tài khoản thành công! Vui lòng đăng nhập.");
+      router.push("/login");
+    } catch (err: any) {
+      setError(err.message || "Lỗi kết nối máy chủ!");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -84,7 +106,7 @@ export default function RegisterPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="w-full p-3 rounded-xl border border-brew-200 focus:outline-none focus:border-brew-600"
-            placeholder="Tối thiểu 6 ký tự"
+            placeholder="Nhập mật khẩu"
             required
           />
         </div>
@@ -103,9 +125,10 @@ export default function RegisterPage() {
 
         <button
           type="submit"
-          className="w-full bg-brew-600 text-white py-3.5 rounded-xl font-bold text-base hover:bg-brew-700 active:scale-95 transition-all shadow-md mt-2"
+          disabled={loading}
+          className="w-full bg-brew-600 text-white py-3.5 rounded-xl font-bold text-base hover:bg-brew-700 active:scale-95 transition-all shadow-md mt-2 disabled:opacity-50"
         >
-          Đăng ký
+          {loading ? "Đang xử lý..." : "Đăng ký"}
         </button>
       </form>
 

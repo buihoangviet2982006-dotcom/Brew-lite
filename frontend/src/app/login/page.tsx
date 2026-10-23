@@ -6,36 +6,63 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Coffee } from "lucide-react";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   
   const login = useAuth((state) => state.login);
   const router = useRouter();
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setLoading(true);
 
-    // Tài khoản test mẫu (hoặc tài khoản vừa đăng ký lưu trong localStorage)
-    const registeredUserStr = localStorage.getItem("registeredUser");
-    const registeredUser = registeredUserStr ? JSON.parse(registeredUserStr) : null;
+    try {
+      // Gọi API thật từ Backend NestJS
+      let res = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
 
-    if (email === "test@brewlite.com" && password === "123456") {
-      login(
-        { id: "u1", email: "test@brewlite.com", fullName: "Thành Viên 3", loyaltyPoints: 150 },
-        "jwt-mock-token-brewlite-123"
-      );
+      // Nếu route /api/auth/login trả 404, thử fallback route /auth/login
+      if (res.status === 404) {
+        res = await fetch("http://localhost:4000/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+      }
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.message || "Email hoặc mật khẩu không chính xác!");
+      }
+
+      // Xử lý linh hoạt token/user từ Backend
+      const realToken = data.accessToken || data.access_token || data.token;
+      const realUser = data.user || {
+        id: data.id || "u1",
+        email: email,
+        fullName: data.fullName || data.name || email.split("@")[0],
+      };
+
+      if (!realToken) {
+        throw new Error("Không nhận được Token từ server Backend!");
+      }
+
+      login(realUser, realToken);
       router.push("/");
-    } else if (registeredUser && registeredUser.email === email && registeredUser.password === password) {
-      login(
-        { id: "u2", email: registeredUser.email, fullName: registeredUser.fullName, loyaltyPoints: 0 },
-        "jwt-mock-token-brewlite-456"
-      );
-      router.push("/");
-    } else {
-      setError("Email hoặc mật khẩu không chính xác! (Thử: test@brewlite.com / 123456)");
+    } catch (err: any) {
+      setError(err.message || "Không thể kết nối đến máy chủ Backend!");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -61,7 +88,7 @@ export default function LoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="w-full p-3.5 rounded-xl border border-brew-200 focus:outline-none focus:border-brew-600"
-            placeholder="test@brewlite.com"
+            placeholder="nhap@email.com"
             required
           />
         </div>
@@ -80,9 +107,10 @@ export default function LoginPage() {
 
         <button
           type="submit"
-          className="w-full bg-brew-600 text-white py-3.5 rounded-xl font-bold text-base hover:bg-brew-700 active:scale-95 transition-all shadow-md mt-4"
+          disabled={loading}
+          className="w-full bg-brew-600 text-white py-3.5 rounded-xl font-bold text-base hover:bg-brew-700 active:scale-95 transition-all shadow-md mt-4 disabled:opacity-50"
         >
-          Đăng nhập
+          {loading ? "Đang kết nối API..." : "Đăng nhập"}
         </button>
       </form>
 

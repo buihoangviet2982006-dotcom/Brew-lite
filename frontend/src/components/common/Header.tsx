@@ -6,15 +6,16 @@ import Link from "next/link";
 import { useAuth } from "@/store/useAuth";
 
 export default function Header() {
-  // Giữ nguyên số lượng giả lập để không bị lỗi thiếu module useCart
   const cartItemCount = 2;
 
   const { user, isAuthenticated, logout, hydrate } = useAuth();
 
-  // Tự động khôi phục trạng thái đăng nhập khi tải lại trang
   useEffect(() => {
     hydrate();
   }, [hydrate]);
+
+  // Fallback an toàn tránh lỗi TypeScript undefined khi build Production
+  const displayName = user?.fullName || user?.name || user?.email || "User";
 
   return (
     <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-brew-100 px-5 py-4 flex items-center justify-between shadow-sm">
@@ -28,14 +29,13 @@ export default function Header() {
       </Link>
 
       <div className="flex items-center gap-3">
-        {/* Header User Info */}
         {isAuthenticated && user ? (
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-brew-100 rounded-full flex items-center justify-center text-brew-800 font-bold border border-brew-200">
-              {user.fullName.charAt(0).toUpperCase()}
+              {displayName.charAt(0).toUpperCase()}
             </div>
             <span className="text-sm font-bold text-brew-900 max-w-[100px] truncate">
-              {user.fullName}
+              {displayName}
             </span>
             <button
               onClick={logout}
