@@ -2,10 +2,12 @@
 
 import { ShoppingCart, Coffee } from "lucide-react";
 import Link from "next/link";
+import { useCartStore } from "@/lib/cart-store";
 
 export default function Header() {
-  // Giả lập số lượng món trong giỏ, Task 5 em sẽ móc Zustand vào đây
-  const cartItemCount = 2; 
+  const cartItemCount = useCartStore((state) =>
+    state.items.reduce((total, item) => total + item.quantity, 0),
+  );
 
   return (
     <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-brew-100 px-5 py-4 flex items-center justify-between shadow-sm">
@@ -24,7 +26,7 @@ export default function Header() {
         {/* Badge số lượng màu đỏ nổi bật */}
         {cartItemCount > 0 && (
           <span className="absolute top-0 right-0 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white">
-            {cartItemCount}
+            {cartItemCount > 99 ? "99+" : cartItemCount}
           </span>
         )}
       </Link>
