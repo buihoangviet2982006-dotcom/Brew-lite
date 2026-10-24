@@ -14,11 +14,13 @@ const ORDER_NUMBER_ATTEMPTS = 5;
 export class OrdersService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** Tạo mã nhận diện hiển thị cho quầy; DB sẽ đảm bảo mã không bị trùng. */
   private generateOrderNumber(): string {
     const randomNum = Math.floor(1000 + Math.random() * 9000);
     return `#${randomNum}`;
   }
 
+  /** Chỉ retry khi mã orderNumber vi phạm unique constraint của database. */
   private isOrderNumberCollision(error: unknown): boolean {
     if (
       !(error instanceof Prisma.PrismaClientKnownRequestError) ||
@@ -33,6 +35,7 @@ export class OrdersService {
       : typeof target === 'string' && target.includes('orderNumber');
   }
 
+  /** Lấy giá size từ cấu hình sản phẩm; dùng quy tắc mặc định nếu chưa cấu hình sizes. */
   private getProductPrice(
     product: { price: Prisma.Decimal; category: string; sizes: Prisma.JsonValue | null },
     size: string,
@@ -76,7 +79,13 @@ export class OrdersService {
     throw new BadRequestException('Kích thước không hợp lệ cho sản phẩm.');
   }
 
+  /**
+   * Tạo đơn PENDING và tính tổng dự kiến.
+   * Hàm này chỉ kiểm tra tồn kho, không trừ hàng, điểm hay lượt voucher;
+   * các thay đổi đó thuộc bước thanh toán thành công.
+   */
   async create(dto: CreateOrderDto, userId: string) {
+    // 1. Kiểm tra giỏ hàng và số lượng trước khi truy vấn database.
     if (!dto.items?.length) {
       throw new BadRequestException('Giỏ hàng không được để trống.');
     }
@@ -92,20 +101,18 @@ export class OrdersService {
       }
     }
 
-    const normalizedVoucherCode = dto.voucherCode?.trim().toUpperCase();
-    const normalizedVoucherId = dto.voucherId?.trim();
-    if (dto.voucherCode !== undefined && !normalizedVoucherCode) {
-      throw new BadRequestException('Mã voucher không được để trống.');
-    }
-    if (dto.voucherId !== undefined && !normalizedVoucherId) {
-      throw new BadRequestException('Mã voucher không được để trống.');
-    }
+    // Voucher không bắt buộc: chuỗi trống/khoảng trắng được xem như không chọn.
+    const normalizedVoucherCode =
+      dto.voucherCode?.trim().toUpperCase() || undefined;
+    const normalizedVoucherId = dto.voucherId?.trim() || undefined;
 
+    // 2. Thử lại tối đa vài lần nếu mã đơn ngẫu nhiên bị trùng.
     for (let attempt = 0; attempt < ORDER_NUMBER_ATTEMPTS; attempt += 1) {
       const orderNumber = this.generateOrderNumber();
 
       try {
         const order = await this.prisma.$transaction(async (tx) => {
+          // 3. Xác nhận tài khoản tồn tại để thỏa khóa ngoại của đơn hàng.
           const user = await tx.user.findUnique({ where: { id: userId } });
           if (!user) {
             throw new NotFoundException('Không tìm thấy tài khoản đặt hàng.');
@@ -116,6 +123,8 @@ export class OrdersService {
             where: { id: { in: productIds } },
           });
           const productsById = new Map(products.map((product) => [product.id, product]));
+
+          // Cộng số lượng trùng product/topping để kiểm tra tổng nhu cầu của cả giỏ.
           const requestedProductQuantities = new Map<string, number>();
           const requestedToppingQuantities = new Map<string, number>();
           for (const item of dto.items) {
@@ -139,6 +148,8 @@ export class OrdersService {
               ),
             ),
           ];
+
+          // 4. Đọc topping đang hoạt động một lần, sau đó tra cứu bằng ID.
           const toppings = allToppingIds.length
             ? await tx.topping.findMany({
                 where: { id: { in: allToppingIds }, isActive: true },
@@ -146,6 +157,8 @@ export class OrdersService {
             : [];
           const toppingsById = new Map(toppings.map((topping) => [topping.id, topping]));
 
+          // 5. Xác minh sản phẩm, size, topping và tính giá từng dòng từ database.
+          // Kiểm tra stock chỉ xác nhận hiện còn đủ; không giữ chỗ hay trừ kho ở đây.
           let subtotal = new Prisma.Decimal(0);
           const preparedItems = dto.items.map((item) => {
             const product = productsById.get(item.productId);
@@ -203,6 +216,8 @@ export class OrdersService {
             };
           });
 
+          // 6. Nếu có voucher thì kiểm tra điều kiện và tính mức giảm dự kiến.
+          // Chưa tăng usedCount vì đơn vẫn đang PENDING, chưa thanh toán.
           let voucherDiscount = new Prisma.Decimal(0);
           let voucher: Prisma.VoucherGetPayload<{}> | null = null;
 
@@ -261,6 +276,7 @@ export class OrdersService {
             }
           }
 
+          // 7. Kiểm tra điểm và tính giảm giá dự kiến; chưa trừ điểm ở bước tạo đơn.
           const pointsUsed = dto.pointsUsed ?? 0;
           if (!Number.isSafeInteger(pointsUsed) || pointsUsed < 0) {
             throw new BadRequestException('Số điểm sử dụng không hợp lệ.');
@@ -277,36 +293,10 @@ export class OrdersService {
             );
           }
 
-          if (voucher) {
-            const voucherUse = await tx.voucher.updateMany({
-              where: {
-                id: voucher.id,
-                isActive: true,
-                usageLimit: voucher.usageLimit,
-                ...(voucher.usageLimit !== null
-                  ? { usedCount: { lt: voucher.usageLimit } }
-                  : {}),
-              },
-              data: { usedCount: { increment: 1 } },
-            });
-            if (voucherUse.count !== 1) {
-              throw new BadRequestException('Voucher đã hết lượt sử dụng.');
-            }
-          }
-
-          if (pointsUsed > 0) {
-            const pointRedemption = await tx.user.updateMany({
-              where: { id: userId, loyaltyPoints: { gte: pointsUsed } },
-              data: { loyaltyPoints: { decrement: pointsUsed } },
-            });
-            if (pointRedemption.count !== 1) {
-              throw new BadRequestException('Bạn không có đủ điểm để sử dụng.');
-            }
-          }
-
           const discountAmount = voucherDiscount.plus(pointsDiscount);
           const total = subtotal.minus(discountAmount);
 
+          // 8. Lưu đơn PENDING cùng các dòng hàng và snapshot topping trong transaction.
           return tx.order.create({
             data: {
               orderNumber,
@@ -326,6 +316,7 @@ export class OrdersService {
           });
         });
 
+        // 9. Chỉ trả các thông tin cần thiết cho màn hình xác nhận đơn.
         return {
           success: true,
           message: 'Tạo đơn hàng thành công!',
@@ -341,6 +332,7 @@ export class OrdersService {
           },
         };
       } catch (error) {
+        // Các lỗi khác (validation, database, thiếu dữ liệu) phải trả về caller.
         if (
           this.isOrderNumberCollision(error) &&
           attempt < ORDER_NUMBER_ATTEMPTS - 1
