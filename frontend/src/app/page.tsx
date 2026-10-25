@@ -5,6 +5,7 @@ import ProductCard from "@/components/menu/ProductCard";
 import ProductDetailModal from "@/components/menu/ProductDetailModal";
 import { Product } from "@/types";
 import { fetchApi } from "@/lib/api";
+import { useCartStore } from "@/lib/cart-store";
 
 export default function MenuPage() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -12,6 +13,7 @@ export default function MenuPage() {
   const [isMounted, setIsMounted] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const addItemToCart = useCartStore((state) => state.addItem);
 
   useEffect(() => {
     setIsMounted(true);
@@ -40,7 +42,8 @@ export default function MenuPage() {
     fetchProducts();
   }, []);
 
-  const handleAddToCart = (item: any) => {
+  const handleAddToCart = (item: Parameters<typeof addItemToCart>[0]) => {
+    addItemToCart(item);
     // Thông báo toast phản hồi người dùng
     setToastMessage(`Đã thêm ${item.name} (${item.size}) vào giỏ!`);
     setTimeout(() => {

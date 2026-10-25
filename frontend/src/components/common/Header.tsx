@@ -3,10 +3,13 @@
 import { useEffect } from "react";
 import { ShoppingCart, Coffee, UserCircle, LogOut } from "lucide-react";
 import Link from "next/link";
+import { useCartStore } from "@/lib/cart-store";
 import { useAuth } from "@/store/useAuth";
 
 export default function Header() {
-  const cartItemCount = 2;
+  const cartItemCount = useCartStore((state) =>
+    state.items.reduce((total, item) => total + item.quantity, 0),
+  );
 
   const { user, isAuthenticated, logout, hydrate } = useAuth();
 
@@ -57,9 +60,10 @@ export default function Header() {
 
         <Link href="/cart" className="relative p-2 hover:bg-brew-50 rounded-full transition-colors">
           <ShoppingCart className="w-6 h-6 text-brew-800" />
+          {/* Badge số lượng màu đỏ nổi bật */}
           {cartItemCount > 0 && (
             <span className="absolute top-0 right-0 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white">
-              {cartItemCount}
+              {cartItemCount > 99 ? "99+" : cartItemCount}
             </span>
           )}
         </Link>
