@@ -15,6 +15,13 @@ export async function fetchApi<T>(
     headers.set("Content-Type", "application/json");
   }
 
+  if (typeof window !== "undefined" && !headers.has("Authorization")) {
+    const token = localStorage.getItem("accessToken");
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
   const response = await fetch(url, {
     ...options,
     headers,

@@ -1,21 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { useAuth } from "@/store/useAuth";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Coffee } from "lucide-react";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
 
-export default function LoginPage() {
+function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  
+
   const login = useAuth((state) => state.login);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectUrl = searchParams.get("redirect") || "/";
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,21 +25,11 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      // Gọi API thật từ Backend NestJS
-      let res = await fetch(`${API_BASE_URL}/auth/login`, {
+      const res = await fetch(`${API_BASE_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-
-      // Nếu route /api/auth/login trả 404, thử fallback route /auth/login
-      if (res.status === 404) {
-        res = await fetch("http://localhost:4000/auth/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password }),
-        });
-      }
 
       const data = await res.json();
 
@@ -45,7 +37,6 @@ export default function LoginPage() {
         throw new Error(data.message || "Email hoặc mật khẩu không chính xác!");
       }
 
-      // Xử lý linh hoạt token/user từ Backend
       const realToken = data.accessToken || data.access_token || data.token;
       const realUser = data.user || {
         id: data.id || "u1",
@@ -58,7 +49,7 @@ export default function LoginPage() {
       }
 
       login(realUser, realToken);
-      router.push("/");
+      router.push(redirectUrl);
     } catch (err: any) {
       setError(err.message || "Không thể kết nối đến máy chủ Backend!");
     } finally {
@@ -116,10 +107,18 @@ export default function LoginPage() {
 
       <p className="mt-6 text-sm text-brew-600">
         Chưa có tài khoản?{" "}
-        <Link href="/register" className="font-bold text-brew-800 hover:underline">
+        <Link href={`/register${redirectUrl !== "/" ? `?redirect=${encodeURIComponent(redirectUrl)}` : ""}`} className="font-bold text-brew-800 hover:underline">
           Đăng ký ngay
         </Link>
       </p>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[80vh] flex items-center justify-center text-brew-700">Đang tải...</div>}>
+      <LoginForm />
+    </Suspense>
   );
 }

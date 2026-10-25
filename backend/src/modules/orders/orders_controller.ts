@@ -6,23 +6,25 @@ import {
   ValidationPipe,
   HttpCode,
   HttpStatus,
+  UseGuards,
 } from '@nestjs/common';
 import { OrdersService } from './orders_service';
 import { CreateOrderDto } from './dto/create_order_dto';
-
-const DEMO_USER_ID = 'usr-demo-01';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @Controller('orders')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
 export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
+  constructor(private readonly ordersService: OrdersService) { }
 
-  /**
-   * POST /api/orders
-   */
   @Post()
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.CREATED)
-  async createOrder(@Body() createOrderDto: CreateOrderDto) {
-    return this.ordersService.create(createOrderDto, DEMO_USER_ID);
+  async createOrder(
+    @Body() createOrderDto: CreateOrderDto,
+    @CurrentUser() user: { id: string },
+  ) {
+    return this.ordersService.create(createOrderDto, user.id);
   }
 }

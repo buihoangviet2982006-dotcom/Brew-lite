@@ -62,7 +62,7 @@ export default function Header() {
           <ShoppingCart className="w-6 h-6 text-brew-800" />
           {/* Badge số lượng màu đỏ nổi bật */}
           {cartItemCount > 0 && (
-            <span className="absolute top-0 right-0 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white">
+            <span suppressHydrationWarning className="absolute top-0 right-0 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white">
               {cartItemCount > 99 ? "99+" : cartItemCount}
             </span>
           )}
