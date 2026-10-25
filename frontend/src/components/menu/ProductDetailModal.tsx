@@ -2,22 +2,13 @@
 
 import React, { useState, useEffect } from "react";
 import { ArrowLeft, Plus, Minus, Check, Loader2, AlertCircle } from "lucide-react";
-import { ProductDetail, ToppingItem, ProductSizeItem } from "@/types";
+import { CartItem, ProductDetail, ToppingItem, ProductSizeItem } from "@/types";
 import { fetchApi } from "@/lib/api";
 
 interface ProductDetailModalProps {
   productId: string;
   onClose: () => void;
-  onAddToCart?: (item: {
-    productId: string;
-    name: string;
-    price: number;
-    size: string;
-    toppings: string[];
-    quantity: number;
-    imageUrl: string;
-    itemTotal: number;
-  }) => void;
+  onAddToCart?: (item: CartItem) => void;
 }
 
 export default function ProductDetailModal({
@@ -121,6 +112,7 @@ export default function ProductDetailModal({
       price: unitPrice,
       size: selectedSize,
       toppings: selectedToppings.map((t) => t.name),
+      toppingIds: selectedToppings.map((t) => t.id),
       quantity,
       imageUrl: product.imageUrl,
       itemTotal: totalPrice,
