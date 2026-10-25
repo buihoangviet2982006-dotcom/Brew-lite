@@ -1,18 +1,24 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
 
-export async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
-  
+export async function fetchApi<T>(
+  endpoint: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const url = `${API_BASE_URL}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+
   const headers = new Headers(options.headers);
-  if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
-    headers.set('Content-Type', 'application/json');
+  if (
+    !headers.has("Content-Type") &&
+    !(typeof FormData !== "undefined" && options.body instanceof FormData)
+  ) {
+    headers.set("Content-Type", "application/json");
   }
 
-  // Auto attach JWT token from localStorage if available
-  if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('brewlite_token');
-    if (token && !headers.has('Authorization')) {
-      headers.set('Authorization', `Bearer ${token}`);
+  if (typeof window !== "undefined" && !headers.has("Authorization")) {
+    const token = localStorage.getItem("accessToken");
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
     }
   }
 

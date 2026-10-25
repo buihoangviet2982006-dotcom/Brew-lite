@@ -35,9 +35,25 @@ export interface CartItem {
   price: number;
   size: ProductSize;
   toppings: string[];
+  toppingIds?: string[];
   quantity: number;
   imageUrl: string;
   itemTotal: number;
+}
+
+export interface CreateOrderResponse {
+  success: boolean;
+  message: string;
+  data: {
+    id: string;
+    orderNumber: string;
+    status: OrderStatus;
+    subtotal: number;
+    discountAmount: number;
+    total: number;
+    itemsCount: number;
+    createdAt: string;
+  };
 }
 
 export type OrderStatus =
@@ -68,4 +84,3 @@ export interface User {
   role?: 'CUSTOMER' | 'BARISTA' | 'ADMIN';
   loyaltyPoints: number;
 }
-
