@@ -8,9 +8,31 @@
 | `GET` | `/api/products/:id` | Xem chi tiết sản phẩm | Public |
 | `POST` | `/api/auth/register` | Đăng ký tài khoản người dùng mới | Public |
 | `POST` | `/api/auth/login` | Đăng nhập và nhận JWT token | Public |
-| `POST` | `/api/orders` | Tạo đơn hàng mới (trạng thái `PENDING`) | Authenticated |
+| `POST` | `/api/orders` | Tạo đơn hàng mới (trạng thái `PENDING`) | Authenticated (JWT) |
 | `POST` | `/api/payments` | Thanh toán đơn hàng không tiền mặt (Idempotent) | Authenticated |
 | `GET` | `/api/orders/me` | Lấy lịch sử đơn hàng của người dùng hiện tại | Authenticated |
+
+### Tạo đơn hàng
+
+`POST /api/orders` nhận danh sách sản phẩm và lựa chọn, yêu cầu header `Authorization: Bearer <token>` (được bảo vệ bởi `JwtAuthGuard` theo tiêu chí chấp nhận Task 7):
+
+```json
+{
+  "items": [
+    {
+      "productId": "prod-cf-01",
+      "size": "M",
+      "qty": 1,
+      "toppings": [{ "toppingId": "top-pearl" }]
+    }
+  ],
+  "voucherCode": "BREWLITE10",
+  "pointsUsed": 100,
+  "note": "Ít đá"
+}
+```
+
+Backend đọc giá sản phẩm, size và topping từ database, kiểm tra khả dụng/tồn kho, điều kiện và giới hạn voucher, rồi tính tổng trong transaction. `100` điểm được đổi thành `1.000đ`; điểm và lượt voucher được ghi nhận ngay khi đơn được tạo. Giá gửi từ client (như `basePrice`, `price` hoặc `discountAmount`) không được dùng để tính tiền. Đơn hàng được tạo thành công ở trạng thái `PENDING` gắn trực tiếp vào tài khoản người dùng đăng nhập (`user.id`).
 
 ---
 
