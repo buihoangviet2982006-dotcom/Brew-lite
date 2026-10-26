@@ -1,11 +1,11 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { CreatePaymentDto, SePayWebhookDto } from './dto/payment.dto';
+import { CreatePaymentDto } from './dto/payment.dto';
 import { OrderStatus, PaymentMethod, PaymentStatus, Prisma } from '@prisma/client';
 
 @Injectable()
@@ -18,15 +18,14 @@ export class PaymentsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async generateVietQR(orderId: string) {
+  async generateVietQR(orderId: string, userId: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
     });
 
-    if (!order) {
-      throw new NotFoundException(`Không tìm thấy đơn hàng ${orderId}`);
-    }
-
+    if (!order) throw new NotFoundException(`Không tìm thấy đơn hàng ${orderId}`);
+    if (order.userId !== userId) throw new ForbiddenException('Bạn không có quyền thanh toán đơn hàng này');
+    
     if (order.status !== OrderStatus.PENDING && order.status !== OrderStatus.PAYMENT_FAILED) {
       throw new BadRequestException(`Đơn hàng đang ở trạng thái ${order.status}`);
     }
@@ -37,92 +36,20 @@ export class PaymentsService {
     
     const qrUrl = `https://img.vietqr.io/image/${this.vietQrConfig.bankId}-${this.vietQrConfig.accountNo}-compact2.png?amount=${amount}&addInfo=${transferContent}&accountName=${accountNameEncoded}`;
 
-    return {
-      success: true,
-      orderId: order.id,
-      amount,
-      transferContent,
-      bankId: this.vietQrConfig.bankId,
-      accountNo: this.vietQrConfig.accountNo,
-      accountName: this.vietQrConfig.accountName,
-      qrUrl,
-    };
+    return { success: true, orderId: order.id, amount, transferContent, qrUrl };
   }
 
-  async handleSePayWebhook(webhookData: SePayWebhookDto, authHeader?: string) {
-    if (process.env.SEPAY_API_KEY && authHeader) {
-      const token = authHeader.replace('Apikey ', '').trim();
-      if (token !== process.env.SEPAY_API_KEY) {
-        throw new UnauthorizedException('API Key SePay không hợp lệ');
-      }
-    }
-
-    const idempotencyKey = `SEPAY_TXN_${webhookData.id}`;
-    const existingPayment = await this.prisma.payment.findUnique({
-      where: { idempotencyKey },
-    });
-
-    if (existingPayment) {
-      return { success: true, message: 'Idempotent replay', paymentId: existingPayment.id };
-    }
-
-    const content = webhookData.content || '';
-    let targetOrder = null;
-
-    const matchPrefix = content.match(/BL([A-Za-z0-9]{8})/i);
-    if (matchPrefix) {
-      targetOrder = await this.prisma.order.findFirst({
-        where: { id: { startsWith: matchPrefix[1].toLowerCase() } },
-      });
-    }
-
-    if (!targetOrder) {
-      throw new NotFoundException(`Không tìm thấy đơn hàng qua nội dung: ${content}`);
-    }
-
-    if (Number(webhookData.amountIn) < Number(targetOrder.total)) {
-      throw new BadRequestException('Số tiền chuyển chưa đủ');
-    }
-
-    return await this.prisma.$transaction(async (tx) => {
-      const payment = await tx.payment.create({
-        data: {
-          orderId: targetOrder.id,
-          idempotencyKey,
-          amount: new Prisma.Decimal(webhookData.amountIn),
-          method: PaymentMethod.WALLET,
-          status: PaymentStatus.SUCCESS,
-          transactionId: String(webhookData.id),
-        },
-      });
-
-      const earnedPoints = Math.floor(Number(webhookData.amountIn) / 10000);
-
-      const updatedOrder = await tx.order.update({
-        where: { id: targetOrder.id },
-        data: { status: OrderStatus.PAID, pointsEarned: earnedPoints },
-      });
-
-      await tx.user.update({
-        where: { id: targetOrder.userId },
-        data: { loyaltyPoints: { increment: earnedPoints } },
-      });
-
-      return { success: true, orderId: updatedOrder.id, paymentId: payment.id };
-    });
-  }
-
-  async processDirectPayment(dto: CreatePaymentDto, idempotencyKey: string) {
+  async processDirectPayment(dto: CreatePaymentDto, idempotencyKey: string, userId: string) {
     if (!idempotencyKey) throw new BadRequestException('Thiếu Idempotency-Key');
 
     const existingPayment = await this.prisma.payment.findUnique({
       where: { idempotencyKey },
     });
-
     if (existingPayment) return { isIdempotentReplay: true, payment: existingPayment };
 
     const order = await this.prisma.order.findUnique({ where: { id: dto.orderId } });
     if (!order) throw new NotFoundException('Không tìm thấy đơn hàng');
+    if (order.userId !== userId) throw new ForbiddenException('Bạn không có quyền thanh toán đơn hàng này');
 
     const isSuccess = dto.amount !== 999999; 
 
