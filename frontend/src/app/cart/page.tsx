@@ -146,6 +146,12 @@ export default function CartPage() {
           >
             Quay lại thực đơn
           </Link>
+          <Link
+           href="/orders/history"
+           className="mt-3 inline-flex rounded-xl border border-brew-200 px-5 py-3 text-sm font-bold text-brew-800 hover:bg-brew-50 transition"
+>
+            Xem lịch sử đơn hàng
+          </Link>
         </div>
       ) : items.length === 0 ? (
         <div className="rounded-3xl border border-dashed border-brew-300 bg-white px-5 py-14 text-center">

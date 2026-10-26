@@ -346,3 +346,34 @@ export class OrdersService {
     throw new Error('Không thể tạo mã đơn hàng duy nhất.');
   }
 }
+  /**
+   * Lấy lịch sử đơn hàng của người dùng đang đăng nhập.
+   */
+  async findMyOrders(userId: string) {
+    const orders = await this.prisma.order.findMany({
+      where: {
+        userId,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      include: {
+        items: true,
+      },
+    });
+
+    return {
+      success: true,
+      data: orders.map((order) => ({
+        id: order.id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        subtotal: Number(order.subtotal),
+        discountAmount: Number(order.discountAmount),
+        total: Number(order.total),
+        itemsCount: order.items.length,
+        createdAt: order.createdAt,
+        items: order.items,
+      })),
+    };
+  }
