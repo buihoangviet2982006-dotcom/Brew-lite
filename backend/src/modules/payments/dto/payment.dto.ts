@@ -1,4 +1,4 @@
-import { IsEnum, IsNotEmpty, IsNumber, IsPositive, IsUUID } from 'class-validator';
+import { IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsPositive, IsUUID } from 'class-validator';
 import { PaymentMethod } from '@prisma/client';
 
 export class CreatePaymentDto {
@@ -12,4 +12,8 @@ export class CreatePaymentDto {
 
   @IsEnum(PaymentMethod)
   method: PaymentMethod;
+
+  @IsOptional()
+  @IsBoolean()
+  simulateFailure?: boolean;
 }
