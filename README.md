@@ -19,17 +19,34 @@ Dự án được xây dựng theo mô hình **Monorepo**, áp dụng quy trình
 
 ---
 
-## 👥 2. Các Bên Liên Quan (Stakeholders)
+## 👥 2. Thông tin nhóm
+
+| STT | Họ và tên | MSSV | Vai trò Scrum |
+| :-: | :--- | :--- | :--- |
+| 1 | _Bùi Hoàng Việt_ | _3124410403_ | Product Owner |
+| 2 | _Đinh Đào Thái Sơn_ | _3123410306_ | Scrum Master |
+| 3 | _Nguyễn Quang Đạt_ | _3122410071_ | Development Team |
+| 4 | _Hoàng Gia Bảo_ | _3124410013_ | Development Team |
+| 5 | _Trần Minh Trí_ | _3124410372_ | Development Team |
+| 6 | _Cao Thanh Duy_ | _3123410054_ | Development Team |
+
+- **Giảng viên hướng dẫn:** _Từ Lãng Phiêu_
+- **Repository:** [_Brew-lite_](https://github.com/buihoangviet2982006-dotcom/Brew-lite.git)
+
+---
+
+## 👥 3. Các Bên Liên Quan (Stakeholders)
 
 * **Khách hàng (Customer):** Xem menu, tùy chọn size/topping, thêm giỏ hàng, thanh toán không tiền mặt và theo dõi trạng thái đơn hàng.
 * **Quản lý / Product Owner (PO):** Định hướng yêu cầu, ưu tiên Product Backlog và nghiệm thu Increment sau mỗi Sprint.
 * **Nhóm phát triển (Development Team):** Thiết kế kiến trúc, lập trình frontend/backend, viết unit/integration test và thiết lập CI/CD, Docker.
+* **Nhân viên quầy / Barista:** Tiếp nhận đơn sau khi thanh toán thành công, cập nhật trạng thái pha chế (PREPARING → READY)
 * **Giảng viên nghiệm thu:** Đóng vai trò khách hàng/chuyên gia đánh giá quy trình Agile Scrum, chất lượng mã nguồn và sản phẩm bàn giao.
 * **Cổng thanh toán (Mock Payment):** Mô phỏng dịch vụ thanh toán Ví điện tử (Momo/ZaloPay) hoặc Thẻ ngân hàng qua cơ chế Idempotent.
 
 ---
 
-## 🏗️ 3. Kiến Trúc & Công Nghệ (Tech Stack)
+## 🏗️ 4. Kiến Trúc & Công Nghệ (Tech Stack)
 
 ```
 [ Frontend: Next.js (SSR/CSR) + TailwindCSS ]
@@ -53,7 +70,7 @@ Dự án được xây dựng theo mô hình **Monorepo**, áp dụng quy trình
 
 ---
 
-## 📁 4. Cấu Trúc Thư Mục (Monorepo Structure)
+## 📁 5. Cấu Trúc Thư Mục (Monorepo Structure)
 
 ```text
 Brew-lite/
@@ -112,7 +129,7 @@ Brew-lite/
 
 ---
 
-## 🔄 5. Quy Trình Agile Scrum & Product Backlog
+## 🔄 6. Quy Trình Agile Scrum & Product Backlog
 
 Dự án chia làm **3 Sprint** bám sát kế hoạch đề ra trong đề bài:
 
@@ -132,7 +149,7 @@ Dự án chia làm **3 Sprint** bám sát kế hoạch đề ra trong đề bài
 
 ---
 
-## 🌿 6. Chiến Lược Phân Nhánh Git (Git Branching Strategy)
+## 🌿 7. Chiến Lược Phân Nhánh Git (Git Branching Strategy)
 
 Dự án áp dụng mô hình nhánh kết hợp chuẩn **Agile Git Flow**:
 
@@ -174,7 +191,7 @@ main (Production / Release sau mỗi Sprint Review)
 
 ---
 
-## ⚡ 7. Hướng Dẫn Cài Đặt & Khởi Chạy (Getting Started)
+## ⚡ 8. Hướng Dẫn Cài Đặt & Khởi Chạy (Getting Started)
 
 ### Yêu cầu hệ thống:
 * **Node.js** >= 18.x
@@ -189,10 +206,11 @@ cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
 
 # 2. Khởi chạy toàn bộ dịch vụ (PostgreSQL + Backend + Frontend)
-docker-compose up -d --build
+docker compose up -d --build
 
-# 3. Kiểm tra container đang chạy
-docker-compose ps
+# 3. Khởi tạo CSDL và nạp dữ liệu mẫu (Seed Data)
+docker compose exec backend npx prisma db push
+docker compose exec backend npx prisma db seed
 ```
 * **Frontend:** [http://localhost:3000](http://localhost:3000)
 * **Backend API:** [http://localhost:4000/api](http://localhost:4000/api)
@@ -212,6 +230,8 @@ docker run --name brewlite-postgres -e POSTGRES_USER=brewlite_admin -e POSTGRES_
 cd backend
 npm install
 npx prisma generate
+npx prisma db push
+npx prisma db seed
 npm run start:dev
 ```
 
@@ -221,10 +241,19 @@ cd frontend
 npm install
 npm run dev
 ```
+### Biến môi trường chính
+
+| Biến | Nơi dùng | Mô tả |
+| :--- | :--- | :--- |
+| `DATABASE_URL` | backend | Chuỗi kết nối PostgreSQL |
+| `JWT_SECRET` | backend | Khóa ký JWT |
+| `JWT_EXPIRATION` | backend | Thời hạn token |
+| `BACKEND_PORT` | backend | Cổng API (mặc định 4000) |
+| `NEXT_PUBLIC_API_URL` | frontend | URL của Backend API |
 
 ---
 
-## 🚦 8. Máy Trạng Thái Đơn Hàng (Order State Machine)
+## 🚦 9. Máy Trạng Thái Đơn Hàng (Order State Machine)
 
 Theo Task 10 và Mục 9 của đề bài, đơn hàng tuân thủ quy tắc chuyển trạng thái nghiêm ngặt:
 
@@ -245,7 +274,24 @@ stateDiagram-v2
 
 ---
 
-## ✅ 9. Definition of Done (DoD)
+## 🧪 10. Kiểm thử (Testing)
+
+Task 10 yêu cầu có unit/integration test chứng minh:
+
+| # | Tiêu chí | Loại test |
+| :-: | :--- | :--- |
+| (a) | Chặn được chuyển trạng thái sai (vd. `PENDING → READY`) | Unit test State Machine |
+| (b) | Gửi 2 lần cùng `Idempotency-Key` chỉ tạo **1 đơn** | Integration test `POST /payments` |
+| (c) | Đặt đồng thời không vượt quá tồn kho | Integration test đồng thời |
+
+```bash
+cd backend
+npm run test        # unit test
+npm run test:e2e    # integration / e2e test
+```
+---
+
+## ✅ 11. Definition of Done (DoD)
 Một Task được tính điểm khi thỏa mãn:
 1. Code chạy được, không lỗi build; tuân theo tiêu chí chấp nhận của task.
 2. Có commit trên Git với mô tả rõ ràng; được review trong nhóm.
