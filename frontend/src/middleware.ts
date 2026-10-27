@@ -14,6 +14,10 @@ export function middleware(request: NextRequest) {
   // 1. Nếu chưa đăng nhập mà cố vào Private Route -> đá về /login
   if (privateRoutes.some((route) => pathname.startsWith(route)) && !token) {
     const loginUrl = new URL('/login', request.url);
+    loginUrl.searchParams.set(
+      'redirect',
+      `${pathname}${request.nextUrl.search}`,
+    );
     return NextResponse.redirect(loginUrl);
   }
 
