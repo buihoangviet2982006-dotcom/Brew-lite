@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,6 +10,9 @@ import { CreateOrderDto } from './dto/create_order_dto';
 
 const POINT_VALUE_VND = 10;
 const ORDER_NUMBER_ATTEMPTS = 5;
+const PAYMENT_ATTEMPTS = 5;
+
+class PaymentWriteConflictError extends Error {}
 
 @Injectable()
 export class OrdersService {
@@ -80,9 +84,7 @@ export class OrdersService {
   }
 
   /**
-   * Tạo đơn PENDING và tính tổng dự kiến.
-   * Hàm này chỉ kiểm tra tồn kho, không trừ hàng, điểm hay lượt voucher;
-   * các thay đổi đó thuộc bước thanh toán thành công.
+   * Tạo đơn PENDING và tính tổng; tồn kho chỉ bị trừ khi đơn chuyển sang PAID.
    */
   async create(dto: CreateOrderDto, userId: string) {
     // 1. Kiểm tra giỏ hàng và số lượng trước khi truy vấn database.
@@ -106,7 +108,7 @@ export class OrdersService {
       dto.voucherCode?.trim().toUpperCase() || undefined;
     const normalizedVoucherId = dto.voucherId?.trim() || undefined;
 
-    // 2. Thử lại tối đa vài lần nếu mã đơn ngẫu nhiên bị trùng.
+    // 2. Thử lại nếu mã đơn hàng bị trùng.
     for (let attempt = 0; attempt < ORDER_NUMBER_ATTEMPTS; attempt += 1) {
       const orderNumber = this.generateOrderNumber();
 
@@ -128,15 +130,29 @@ export class OrdersService {
           const requestedProductQuantities = new Map<string, number>();
           const requestedToppingQuantities = new Map<string, number>();
           for (const item of dto.items) {
+            const productQuantity =
+              (requestedProductQuantities.get(item.productId) ?? 0) + item.qty;
+            if (!Number.isSafeInteger(productQuantity)) {
+              throw new BadRequestException(
+                'Tổng số lượng sản phẩm trong giỏ hàng không hợp lệ.',
+              );
+            }
             requestedProductQuantities.set(
               item.productId,
-              (requestedProductQuantities.get(item.productId) ?? 0) + item.qty,
+              productQuantity,
             );
             for (const selection of item.toppings ?? []) {
+              const toppingQuantity =
+                (requestedToppingQuantities.get(selection.toppingId) ?? 0) +
+                item.qty;
+              if (!Number.isSafeInteger(toppingQuantity)) {
+                throw new BadRequestException(
+                  'Tổng số lượng topping trong giỏ hàng không hợp lệ.',
+                );
+              }
               requestedToppingQuantities.set(
                 selection.toppingId,
-                (requestedToppingQuantities.get(selection.toppingId) ?? 0) +
-                  item.qty,
+                toppingQuantity,
               );
             }
           }
@@ -158,7 +174,6 @@ export class OrdersService {
           const toppingsById = new Map(toppings.map((topping) => [topping.id, topping]));
 
           // 5. Xác minh sản phẩm, size, topping và tính giá từng dòng từ database.
-          // Kiểm tra stock chỉ xác nhận hiện còn đủ; không giữ chỗ hay trừ kho ở đây.
           let subtotal = new Prisma.Decimal(0);
           const preparedItems = dto.items.map((item) => {
             const product = productsById.get(item.productId);
@@ -296,7 +311,7 @@ export class OrdersService {
           const discountAmount = voucherDiscount.plus(pointsDiscount);
           const total = subtotal.minus(discountAmount);
 
-          // 8. Lưu đơn PENDING cùng các dòng hàng và snapshot topping trong transaction.
+          // 8. Lưu đơn chờ thanh toán; tồn kho sẽ được kiểm tra và trừ khi đơn đã thanh toán.
           return tx.order.create({
             data: {
               orderNumber,
@@ -344,5 +359,251 @@ export class OrdersService {
     }
 
     throw new Error('Không thể tạo mã đơn hàng duy nhất.');
+  }
+
+  /**
+   * Được bộ phận thanh toán gọi sau khi giao dịch thành công.
+   * Tồn kho, lượt dùng mã giảm giá, điểm thành viên và trạng thái đơn được cập nhật cùng lúc.
+   */
+  async markAsPaid(orderId: string) {
+    for (let attempt = 0; attempt < PAYMENT_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          const order = await tx.order.findUnique({
+            where: { id: orderId },
+            include: { items: true },
+          });
+          if (!order) {
+            throw new NotFoundException('Không tìm thấy đơn hàng.');
+          }
+
+          if (order.status === 'PAID') {
+            return {
+              success: true,
+              message: 'Đơn hàng đã được thanh toán.',
+              data: {
+                id: order.id,
+                status: order.status,
+                pointsEarned: order.pointsEarned,
+              },
+            };
+          }
+
+          if (order.status !== 'PENDING' && order.status !== 'PAYMENT_FAILED') {
+            throw new BadRequestException(
+              'Đơn hàng không ở trạng thái có thể thanh toán.',
+            );
+          }
+
+          const productQuantities = new Map<string, number>();
+          const toppingQuantities = new Map<string, number>();
+          for (const item of order.items) {
+            const productQuantity =
+              (productQuantities.get(item.productId) ?? 0) + item.qty;
+            if (!Number.isSafeInteger(productQuantity)) {
+              throw new BadRequestException(
+                'Tổng số lượng sản phẩm trong đơn hàng không hợp lệ.',
+              );
+            }
+            productQuantities.set(item.productId, productQuantity);
+
+            if (item.toppings === null) {
+              continue;
+            }
+            if (!Array.isArray(item.toppings)) {
+              throw new BadRequestException(
+                'Dữ liệu topping của đơn hàng không hợp lệ.',
+              );
+            }
+
+            for (const selection of item.toppings) {
+              if (
+                typeof selection !== 'object' ||
+                selection === null ||
+                Array.isArray(selection) ||
+                typeof selection.toppingId !== 'string'
+              ) {
+                throw new BadRequestException(
+                  'Dữ liệu topping của đơn hàng không hợp lệ.',
+                );
+              }
+
+              const toppingQuantity =
+                (toppingQuantities.get(selection.toppingId) ?? 0) + item.qty;
+              if (!Number.isSafeInteger(toppingQuantity)) {
+                throw new BadRequestException(
+                  'Tổng số lượng topping trong đơn hàng không hợp lệ.',
+                );
+              }
+              toppingQuantities.set(selection.toppingId, toppingQuantity);
+            }
+          }
+
+          const products = await tx.product.findMany({
+            where: { id: { in: [...productQuantities.keys()] } },
+          });
+          if (products.length !== productQuantities.size) {
+            throw new BadRequestException(
+              'Một hoặc nhiều sản phẩm trong đơn hàng không còn tồn tại.',
+            );
+          }
+
+          const toppings = toppingQuantities.size
+            ? await tx.topping.findMany({
+                where: { id: { in: [...toppingQuantities.keys()] } },
+              })
+            : [];
+          if (toppings.length !== toppingQuantities.size) {
+            throw new BadRequestException(
+              'Một hoặc nhiều topping trong đơn hàng không còn tồn tại.',
+            );
+          }
+
+          for (const product of products.sort((a, b) =>
+            a.id.localeCompare(b.id),
+          )) {
+            const quantity = productQuantities.get(product.id);
+            if (quantity === undefined) {
+              throw new Error('Không tìm thấy số lượng sản phẩm trong đơn hàng.');
+            }
+            if (product.stock < quantity) {
+              throw new BadRequestException(
+                `Sản phẩm '${product.name}' không đủ tồn kho để thanh toán.`,
+              );
+            }
+
+            const update = await tx.product.updateMany({
+              where: {
+                id: product.id,
+                version: product.version,
+                stock: { gte: quantity },
+              },
+              data: {
+                stock: { decrement: quantity },
+                version: { increment: 1 },
+              },
+            });
+            if (update.count !== 1) {
+              throw new PaymentWriteConflictError();
+            }
+          }
+
+          for (const topping of toppings.sort((a, b) =>
+            a.id.localeCompare(b.id),
+          )) {
+            const quantity = toppingQuantities.get(topping.id);
+            if (quantity === undefined) {
+              throw new Error('Không tìm thấy số lượng topping trong đơn hàng.');
+            }
+            if (topping.stock < quantity) {
+              throw new BadRequestException(
+                `Topping '${topping.name}' không đủ tồn kho để thanh toán.`,
+              );
+            }
+
+            const update = await tx.topping.updateMany({
+              where: {
+                id: topping.id,
+                version: topping.version,
+                stock: { gte: quantity },
+              },
+              data: {
+                stock: { decrement: quantity },
+                version: { increment: 1 },
+              },
+            });
+            if (update.count !== 1) {
+              throw new PaymentWriteConflictError();
+            }
+          }
+
+          if (order.voucherId) {
+            const voucher = await tx.voucher.findUnique({
+              where: { id: order.voucherId },
+            });
+            if (!voucher || !voucher.isActive) {
+              throw new BadRequestException(
+                'Voucher của đơn hàng không còn hợp lệ.',
+              );
+            }
+            if (
+              voucher.usageLimit !== null &&
+              voucher.usedCount >= voucher.usageLimit
+            ) {
+              throw new BadRequestException(
+                'Voucher đã hết lượt sử dụng trước khi thanh toán.',
+              );
+            }
+
+            const voucherUpdate = await tx.voucher.updateMany({
+              where: {
+                id: voucher.id,
+                isActive: true,
+                ...(voucher.usageLimit === null
+                  ? {}
+                  : { usedCount: { lt: voucher.usageLimit } }),
+              },
+              data: { usedCount: { increment: 1 } },
+            });
+            if (voucherUpdate.count !== 1) {
+              throw new PaymentWriteConflictError();
+            }
+          }
+
+          if (order.pointsUsed > 0) {
+            const pointsUpdate = await tx.user.updateMany({
+              where: {
+                id: order.userId,
+                loyaltyPoints: { gte: order.pointsUsed },
+              },
+              data: { loyaltyPoints: { decrement: order.pointsUsed } },
+            });
+            if (pointsUpdate.count !== 1) {
+              throw new BadRequestException(
+                'Bạn không còn đủ điểm để thanh toán đơn hàng này.',
+              );
+            }
+          }
+
+          const pointsEarned = new Prisma.Decimal(order.total)
+            .div(10000)
+            .floor()
+            .toNumber();
+
+          if (pointsEarned > 0) {
+            await tx.user.update({
+              where: { id: order.userId },
+              data: { loyaltyPoints: { increment: pointsEarned } },
+            });
+          }
+
+          const paidOrder = await tx.order.updateMany({
+            where: { id: order.id, status: order.status },
+            data: { status: 'PAID', pointsEarned },
+          });
+          if (paidOrder.count !== 1) {
+            throw new PaymentWriteConflictError();
+          }
+
+          return {
+            success: true,
+            message: 'Thanh toán đơn hàng thành công.',
+            data: {
+              id: order.id,
+              status: 'PAID' as const,
+              pointsEarned,
+            },
+          };
+        });
+      } catch (error) {
+        if (!(error instanceof PaymentWriteConflictError)) {
+          throw error;
+        }
+      }
+    }
+
+    throw new ConflictException(
+      'Dữ liệu vừa được cập nhật bởi một giao dịch khác. Vui lòng thử lại.',
+    );
   }
 }
