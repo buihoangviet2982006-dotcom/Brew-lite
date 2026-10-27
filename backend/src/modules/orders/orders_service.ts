@@ -4,9 +4,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, OrderStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateOrderDto } from './dto/create_order_dto';
+import { assertTransition } from '../../common/orders/order-state-machine';
 
 const POINT_VALUE_VND = 10;
 const ORDER_NUMBER_ATTEMPTS = 5;
@@ -606,7 +607,7 @@ export class OrdersService {
       'Dữ liệu vừa được cập nhật bởi một giao dịch khác. Vui lòng thử lại.',
     );
   }
-}
+
   /**
    * Lấy lịch sử đơn hàng của người dùng đang đăng nhập.
    */
@@ -619,7 +620,17 @@ export class OrdersService {
         createdAt: 'desc',
       },
       include: {
-        items: true,
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                imageUrl: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -633,8 +644,100 @@ export class OrdersService {
         discountAmount: Number(order.discountAmount),
         total: Number(order.total),
         itemsCount: order.items.length,
+        note: order.note,
         createdAt: order.createdAt,
-        items: order.items,
+        items: order.items.map((item) => ({
+          ...item,
+          basePrice: Number(item.basePrice),
+          lineTotal: Number(item.lineTotal),
+        })),
       })),
     };
   }
+
+  /**
+   * Lấy chi tiết một đơn hàng theo ID (phục vụ màn hình xác nhận đơn).
+   */
+  async findOrderById(orderId: string, userId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: orderId,
+        userId,
+      },
+      include: {
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                imageUrl: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Không tìm thấy đơn hàng.');
+    }
+
+    return {
+      success: true,
+      data: {
+        id: order.id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        subtotal: Number(order.subtotal),
+        discountAmount: Number(order.discountAmount),
+        total: Number(order.total),
+        itemsCount: order.items.length,
+        note: order.note,
+        createdAt: order.createdAt,
+        items: order.items.map((item) => ({
+          ...item,
+          basePrice: Number(item.basePrice),
+          lineTotal: Number(item.lineTotal),
+        })),
+      },
+    };
+  }
+
+  /**
+   * Cập nhật trạng thái đơn hàng tuân theo Order State Machine.
+   * Chặn chuyển đổi trạng thái không hợp lệ qua assertTransition.
+   */
+  async updateStatus(
+    orderId: string,
+    nextStatus: OrderStatus,
+    user?: { id: string; role?: string },
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Không tìm thấy đơn hàng.');
+    }
+
+    // Kiểm tra tính hợp lệ bằng State Machine
+    assertTransition(order.status, nextStatus);
+
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: { status: nextStatus },
+    });
+
+    return {
+      success: true,
+      message: `Cập nhật trạng thái đơn hàng sang ${nextStatus} thành công.`,
+      data: {
+        id: updated.id,
+        orderNumber: updated.orderNumber,
+        previousStatus: order.status,
+        status: updated.status,
+      },
+    };
+  }
+}

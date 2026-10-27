@@ -24,12 +24,18 @@ services:
     restart: always
     depends_on:
       - postgres
+    env_file:
+      - .env
     environment:
       NODE_ENV: development
       PORT: ${BACKEND_PORT:-4000}
       DATABASE_URL: postgresql://${POSTGRES_USER:-brewlite_admin}:${POSTGRES_PASSWORD:-brewlite_secure_password}@postgres:5432/${POSTGRES_DB:-brewlite_db}?schema=public
       JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_for_brewlite_2026}
       JWT_EXPIRATION: ${JWT_EXPIRATION:-7d}
+      VIETQR_BANK_ID: ${VIETQR_BANK_ID:-MB}
+      VIETQR_ACCOUNT_NO: ${VIETQR_ACCOUNT_NO:-0868923294}
+      VIETQR_ACCOUNT_NAME: ${VIETQR_ACCOUNT_NAME:-NGUYEN QUANG DAT}
+      SEPAY_API_KEY: ${SEPAY_API_KEY:-2CJ5SU1QZY6SUWPNP2QC3H3ERLBGXPVHDIOI0RHJIB7WW4XVAR0NGEL8TJMWZTYA}
     ports:
       - "${BACKEND_PORT:-4000}:4000"
     networks:
@@ -40,13 +46,17 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000/api}
     container_name: brewlite-frontend
     restart: always
     depends_on:
       - backend
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_API_URL: http://localhost:4000/api
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000/api}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     networks:

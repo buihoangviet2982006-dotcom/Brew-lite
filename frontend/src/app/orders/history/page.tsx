@@ -13,6 +13,11 @@ type OrderItem = {
   basePrice: number;
   lineTotal: number;
   toppings: unknown;
+  product?: {
+    id: string;
+    name: string;
+    imageUrl?: string;
+  };
 };
 
 type Order = {
@@ -196,7 +201,7 @@ export default function OrderHistoryPage() {
                     className="flex justify-between gap-3"
                   >
                     <span>
-                      {item.size} × {item.qty}
+                      {item.product?.name ? `${item.product.name} (${item.size})` : item.size} × {item.qty}
                     </span>
                     <span>{formatPrice(item.lineTotal)}</span>
                   </div>

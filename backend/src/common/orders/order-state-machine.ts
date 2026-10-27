@@ -1,14 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
+import { OrderStatus } from '@prisma/client';
 
-export enum OrderStatus {
-  PENDING = 'PENDING',
-  PAID = 'PAID',
-  PREPARING = 'PREPARING',
-  READY = 'READY',
-  COMPLETED = 'COMPLETED',
-  PAYMENT_FAILED = 'PAYMENT_FAILED',
-  CANCELLED = 'CANCELLED',
-}
+export { OrderStatus };
 
 const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PENDING]: [
@@ -20,7 +13,7 @@ const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
     OrderStatus.PAID,
     OrderStatus.CANCELLED,
   ],
-  [OrderStatus.PAID]: [OrderStatus.PREPARING],
+  [OrderStatus.PAID]: [OrderStatus.PREPARING, OrderStatus.CANCELLED],
   [OrderStatus.PREPARING]: [OrderStatus.READY],
   [OrderStatus.READY]: [OrderStatus.COMPLETED],
   [OrderStatus.COMPLETED]: [],
@@ -28,14 +21,16 @@ const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
 };
 
 export function assertOrderTransition(
-  currentStatus: OrderStatus,
-  nextStatus: OrderStatus,
+  currentStatus: OrderStatus | string,
+  nextStatus: OrderStatus | string,
 ): void {
-  const allowedStatuses = ORDER_TRANSITIONS[currentStatus];
+  const allowedStatuses = ORDER_TRANSITIONS[currentStatus as OrderStatus];
 
-  if (!allowedStatuses?.includes(nextStatus)) {
+  if (!allowedStatuses?.includes(nextStatus as OrderStatus)) {
     throw new BadRequestException(
       `Cannot change order status from ${currentStatus} to ${nextStatus}`,
     );
   }
 }
+
+export const assertTransition = assertOrderTransition;

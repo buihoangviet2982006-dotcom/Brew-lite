@@ -6,26 +6,53 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Starting database seeding...');
 
-  // 1. Seed demo user
-  const demoEmail = 'customer@brewlite.vn';
-  const existingUser = await prisma.user.findUnique({
-    where: { email: demoEmail },
+  // 0. Xóa sạch dữ liệu cũ để tạo seed mới hoàn toàn
+  console.log('🧹 Clearing old database records...');
+  await prisma.payment.deleteMany();
+  await prisma.orderItem.deleteMany();
+  await prisma.order.deleteMany();
+  await prisma.voucher.deleteMany();
+  await prisma.topping.deleteMany();
+  await prisma.product.deleteMany();
+  await prisma.user.deleteMany();
+  console.log('✅ Cleared all existing tables.');
+
+  // 1. Seed demo users (Customer, Barista, Admin)
+  const passwordHash = await bcrypt.hash('password123', 10);
+
+  const demoCustomer = await prisma.user.create({
+    data: {
+      id: 'usr-demo-01',
+      email: 'customer@brewlite.vn',
+      fullName: 'Khách Hàng BrewLite',
+      role: UserRole.CUSTOMER,
+      passwordHash,
+      loyaltyPoints: 120,
+    },
   });
 
-  if (!existingUser) {
-    const passwordHash = await bcrypt.hash('password123', 10);
-    const demoUser = await prisma.user.create({
-      data: {
-        id: 'usr-demo-01',
-        email: demoEmail,
-        fullName: 'Nguyễn Văn Pha Chế',
-        role: UserRole.CUSTOMER,
-        passwordHash,
-        loyaltyPoints: 120,
-      },
-    });
-    console.log(`✅ Seeded demo user: ${demoUser.email}`);
-  }
+  const demoBarista = await prisma.user.create({
+    data: {
+      id: 'usr-barista-01',
+      email: 'barista@brewlite.vn',
+      fullName: 'Pha Chế Viên BrewLite',
+      role: UserRole.BARISTA,
+      passwordHash,
+      loyaltyPoints: 0,
+    },
+  });
+
+  const demoAdmin = await prisma.user.create({
+    data: {
+      id: 'usr-admin-01',
+      email: 'admin@brewlite.vn',
+      fullName: 'Quản Trị Viên BrewLite',
+      role: UserRole.ADMIN,
+      passwordHash,
+      loyaltyPoints: 0,
+    },
+  });
+  console.log(`✅ Seeded users: Customer, Barista, Admin (Mật khẩu: password123)`);
 
   // 2. Seed toppings phong phú (giá 1.000đ - 3.000đ thuận tiện test QR)
   const toppings = [

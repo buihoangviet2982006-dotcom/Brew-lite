@@ -28,4 +28,5 @@ async function bootstrap() {
   console.log(`☕ BrewLite Backend is running on: http://localhost:${port}/api`);
 }
 
+// Bootstrap BrewLite Application
 bootstrap();

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -8,6 +9,9 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreatePaymentDto } from './dto/payment.dto';
 import { OrderStatus, PaymentMethod, PaymentStatus, Prisma } from '@prisma/client';
+import { assertTransition } from '../../common/orders/order-state-machine';
+
+class PaymentWriteConflictError extends Error {}
 
 @Injectable()
 export class PaymentsService {
@@ -199,6 +203,48 @@ export class PaymentsService {
   }
 
   /**
+   * Kiểm soát tồn kho khi thanh toán bằng Transaction + Optimistic Locking (Task 10.3)
+   */
+  private async deductStockOptimistic(tx: Prisma.TransactionClient, orderId: string) {
+    const items = await tx.orderItem.findMany({
+      where: { orderId },
+    });
+
+    const productQuantities = new Map<string, number>();
+    for (const item of items) {
+      productQuantities.set(
+        item.productId,
+        (productQuantities.get(item.productId) ?? 0) + item.qty,
+      );
+    }
+
+    for (const [productId, quantity] of productQuantities.entries()) {
+      const product = await tx.product.findUnique({ where: { id: productId } });
+      if (!product || product.stock < quantity) {
+        throw new BadRequestException(
+          `Sản phẩm '${product?.name ?? productId}' không đủ tồn kho để thanh toán.`,
+        );
+      }
+
+      const updateRes = await tx.product.updateMany({
+        where: {
+          id: product.id,
+          version: product.version,
+          stock: { gte: quantity },
+        },
+        data: {
+          stock: { decrement: quantity },
+          version: { increment: 1 },
+        },
+      });
+
+      if (updateRes.count !== 1) {
+        throw new PaymentWriteConflictError();
+      }
+    }
+  }
+
+  /**
    * Helper chuyển trạng thái đơn hàng sang PAID và lưu giao dịch
    */
   private async completePaymentSuccess(
@@ -215,6 +261,12 @@ export class PaymentsService {
       if (existingPayment) {
         return { status: OrderStatus.PAID, order, payment: existingPayment };
       }
+
+      // 1. Kiểm tra State Machine
+      assertTransition(order.status, OrderStatus.PAID);
+
+      // 2. Trừ tồn kho bằng Optimistic Locking (Task 10.3)
+      await this.deductStockOptimistic(tx, order.id);
 
       const payment = await tx.payment.create({
         data: {
@@ -329,79 +381,103 @@ export class PaymentsService {
     }
 
     const isSuccess = !dto.simulateFailure && dto.amount !== 999999;
+    const MAX_RETRIES = 5;
 
-    return await this.prisma.$transaction(async (tx) => {
-      if (isSuccess) {
-        const payment = await tx.payment.create({
-          data: {
-            orderId: order.id,
-            idempotencyKey,
-            amount: new Prisma.Decimal(dto.amount),
-            method: dto.method,
-            status: PaymentStatus.SUCCESS,
-            transactionId: `TXN_${Date.now()}`,
-          },
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          if (isSuccess) {
+            assertTransition(order.status, OrderStatus.PAID);
+            await this.deductStockOptimistic(tx, order.id);
+
+            const payment = await tx.payment.create({
+              data: {
+                orderId: order.id,
+                idempotencyKey,
+                amount: new Prisma.Decimal(dto.amount),
+                method: dto.method,
+                status: PaymentStatus.SUCCESS,
+                transactionId: `TXN_${Date.now()}`,
+              },
+            });
+
+            // Tích điểm thưởng cho khách: 10.000đ = 1 điểm (Task 10.4)
+            const earnedPoints = Math.floor(Number(dto.amount) / 10000);
+            const updatedOrder = await tx.order.update({
+              where: { id: order.id },
+              data: { status: OrderStatus.PAID, pointsEarned: earnedPoints },
+            });
+
+            await tx.user.update({
+              where: { id: order.userId },
+              data: { loyaltyPoints: { increment: earnedPoints } },
+            });
+
+            // Nếu có voucher, tăng số lượt đã sử dụng
+            if (order.voucherId) {
+              await tx.voucher.update({
+                where: { id: order.voucherId },
+                data: { usedCount: { increment: 1 } },
+              });
+            }
+
+            return {
+              status: 'SUCCESS',
+              payment,
+              order: {
+                id: updatedOrder.id,
+                orderNumber: updatedOrder.orderNumber,
+                status: updatedOrder.status,
+                total: Number(updatedOrder.total),
+                pointsEarned: earnedPoints,
+              },
+            };
+          } else {
+            assertTransition(order.status, OrderStatus.PAYMENT_FAILED);
+            const payment = await tx.payment.create({
+              data: {
+                orderId: order.id,
+                idempotencyKey,
+                amount: new Prisma.Decimal(dto.amount),
+                method: dto.method,
+                status: PaymentStatus.FAILED,
+              },
+            });
+
+            const updatedOrder = await tx.order.update({
+              where: { id: order.id },
+              data: { status: OrderStatus.PAYMENT_FAILED },
+            });
+
+            return {
+              status: 'FAILED',
+              message: 'Giao dịch thanh toán không thành công. Giỏ hàng của bạn được giữ nguyên để có thể thử lại.',
+              payment,
+              order: {
+                id: updatedOrder.id,
+                orderNumber: updatedOrder.orderNumber,
+                status: updatedOrder.status,
+                total: Number(updatedOrder.total),
+              },
+            };
+          }
         });
-
-        // Tích điểm thưởng cho khách: 10.000đ = 1 điểm (Task 10.4)
-        const earnedPoints = Math.floor(Number(dto.amount) / 10000);
-        const updatedOrder = await tx.order.update({
-          where: { id: order.id },
-          data: { status: OrderStatus.PAID, pointsEarned: earnedPoints },
-        });
-
-        await tx.user.update({
-          where: { id: order.userId },
-          data: { loyaltyPoints: { increment: earnedPoints } },
-        });
-
-        // Nếu có voucher, tăng số lượt đã sử dụng
-        if (order.voucherId) {
-          await tx.voucher.update({
-            where: { id: order.voucherId },
-            data: { usedCount: { increment: 1 } },
-          });
+      } catch (error) {
+        if (error instanceof PaymentWriteConflictError && attempt < MAX_RETRIES - 1) {
+          await new Promise((res) => setTimeout(res, 20 + Math.random() * 40));
+          continue;
         }
-
-        return {
-          status: 'SUCCESS',
-          payment,
-          order: {
-            id: updatedOrder.id,
-            orderNumber: updatedOrder.orderNumber,
-            status: updatedOrder.status,
-            total: Number(updatedOrder.total),
-            pointsEarned: earnedPoints,
-          },
-        };
-      } else {
-        const payment = await tx.payment.create({
-          data: {
-            orderId: order.id,
-            idempotencyKey,
-            amount: new Prisma.Decimal(dto.amount),
-            method: dto.method,
-            status: PaymentStatus.FAILED,
-          },
-        });
-
-        const updatedOrder = await tx.order.update({
-          where: { id: order.id },
-          data: { status: OrderStatus.PAYMENT_FAILED },
-        });
-
-        return {
-          status: 'FAILED',
-          message: 'Giao dịch thanh toán không thành công. Giỏ hàng của bạn được giữ nguyên để có thể thử lại.',
-          payment,
-          order: {
-            id: updatedOrder.id,
-            orderNumber: updatedOrder.orderNumber,
-            status: updatedOrder.status,
-            total: Number(updatedOrder.total),
-          },
-        };
+        if (error instanceof PaymentWriteConflictError) {
+          throw new ConflictException(
+            'Dữ liệu sản phẩm vừa được cập nhật bởi một giao dịch khác. Vui lòng thử lại.',
+          );
+        }
+        throw error;
       }
-    });
+    }
+
+    throw new ConflictException(
+      'Dữ liệu vừa được cập nhật bởi một giao dịch khác. Vui lòng thử lại.',
+    );
   }
 }

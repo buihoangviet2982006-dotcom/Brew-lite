@@ -15,11 +15,11 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @Controller('payments')
-@UseGuards(JwtAuthGuard)
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
+  @UseGuards(JwtAuthGuard)
   @Get('vietqr/:orderId')
   async getVietQR(
     @Param('orderId') orderId: string,
@@ -28,6 +28,7 @@ export class PaymentsController {
     return this.paymentsService.generateVietQR(orderId, user.id);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Get('status/:orderId')
   async getPaymentStatus(
     @Param('orderId') orderId: string,
@@ -36,6 +37,7 @@ export class PaymentsController {
     return this.paymentsService.checkPaymentStatus(orderId, user.id);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Post()
   async directPayment(
     @Headers('idempotency-key') headerKey: string,
@@ -55,6 +57,7 @@ export class PaymentsController {
     return this.paymentsService.handleSepayWebhook(payload, authHeader);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Post('simulate-sepay')
   async simulateSepay(
     @Body('orderId') orderId: string,

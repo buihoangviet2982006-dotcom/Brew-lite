@@ -14,7 +14,6 @@ import {
   QrCode,
   RefreshCw,
   ShoppingBag,
-  Sparkles,
   Tag,
 } from "lucide-react";
 import { fetchApi } from "@/lib/api";
@@ -277,35 +276,6 @@ export default function CheckoutPage() {
     }
   };
 
-  const [isSimulating, setIsSimulating] = useState(false);
-
-  // Kích hoạt mô phỏng tiền về từ SePay (Dùng test/demo bài tập lớn)
-  const handleSimulateSepay = async () => {
-    if (!pendingOrder || isSimulating) return;
-    setIsSimulating(true);
-    setError(null);
-    try {
-      const res = await fetchApi<PaymentResponse>("/payments/simulate-sepay", {
-        method: "POST",
-        body: JSON.stringify({ orderId: pendingOrder.id }),
-      });
-
-      if (res.status === "PAID" || res.status === "SUCCESS") {
-        sessionStorage.removeItem(PENDING_ORDER_KEY);
-        clearCart();
-        setPaidOrder(res.order || pendingOrder);
-        setVietQrData(null);
-        setError(null);
-      } else {
-        throw new Error(res.message || "Không thể giả lập thanh toán SePay.");
-      }
-    } catch (err: any) {
-      setError(err instanceof Error ? err.message : "Lỗi khi giả lập thanh toán SePay.");
-    } finally {
-      setIsSimulating(false);
-    }
-  };
-
   // Tự động polling kiểm tra trạng thái mỗi 2.5s khi có mã QR và đơn chờ
   useEffect(() => {
     if (!isMounted || !isAuthenticated || !pendingOrder?.id || paidOrder) return;
@@ -373,12 +343,20 @@ export default function CheckoutPage() {
             </div>
           </div>
 
-          <Link
-            href="/"
-            className="inline-flex rounded-xl bg-brew-600 px-8 py-3 text-sm font-black text-white transition hover:bg-brew-700 shadow-md active:scale-95"
-          >
-            Về trang chủ
-          </Link>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <Link
+              href="/orders/history"
+              className="inline-flex items-center justify-center rounded-xl bg-brew-600 px-6 py-3 text-sm font-black text-white transition hover:bg-brew-700 shadow-md active:scale-95"
+            >
+              Xem lịch sử đơn hàng
+            </Link>
+            <Link
+              href="/"
+              className="inline-flex items-center justify-center rounded-xl border border-brew-300 bg-white px-6 py-3 text-sm font-bold text-brew-800 transition hover:bg-brew-50 active:scale-95"
+            >
+              Về trang chủ
+            </Link>
+          </div>
         </div>
       </section>
     );
@@ -766,26 +744,9 @@ export default function CheckoutPage() {
             <div className="pt-2 border-t border-emerald-200/60 flex flex-col items-center gap-2">
               <button
                 type="button"
-                onClick={handleSimulateSepay}
-                disabled={isSimulating || !pendingOrder}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:from-emerald-700 hover:to-teal-700 active:scale-98 disabled:opacity-50 transition"
-              >
-                {isSimulating ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Sparkles className="h-4 w-4 text-amber-300" />
-                )}
-                <span>Mô phỏng tiền về (SePay Webhook Test)</span>
-              </button>
-              <span className="text-[10px] text-emerald-800 font-medium">
-                Dành cho Demo / Chấm điểm: Giả lập biến động số dư SePay không cần chuyển khoản thật
-              </span>
-
-              <button
-                type="button"
                 onClick={() => checkStatusNow()}
                 disabled={isCheckingStatus}
-                className="inline-flex items-center gap-1.5 text-xs font-semibold text-brew-700 hover:text-brew-950 underline disabled:opacity-50 transition mt-0.5"
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-brew-700 hover:text-brew-950 underline disabled:opacity-50 transition"
               >
                 <RefreshCw className={`h-3 w-3 ${isCheckingStatus ? "animate-spin" : ""}`} />
                 Kiểm tra lại giao dịch ngay
