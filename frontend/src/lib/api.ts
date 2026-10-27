@@ -5,7 +5,8 @@ export async function fetchApi<T>(
   endpoint: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const url = `${API_BASE_URL}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+  const normalizedEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  const url = `${API_BASE_URL}${normalizedEndpoint}`;
 
   const headers = new Headers(options.headers);
   if (
@@ -29,8 +30,12 @@ export async function fetchApi<T>(
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.message || `API error: ${response.statusText}`);
+    const errorMessage =
+      Array.isArray(errorData.message)
+        ? errorData.message.join(", ")
+        : errorData.message || `API error: ${response.statusText}`;
+    throw new Error(errorMessage);
   }
 
-  return response.json();
+  return await response.json();
 }
