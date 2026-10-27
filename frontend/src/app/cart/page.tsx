@@ -154,9 +154,10 @@ export default function CartPage() {
             </div>
             <Link
               href="/checkout"
-              className="mt-4 flex w-full items-center justify-center rounded-xl bg-brew-600 px-4 py-3 text-sm font-black text-white shadow-sm transition hover:bg-brew-700"
+              className="mt-4 flex w-full items-center justify-between rounded-xl bg-brew-600 px-5 py-3.5 text-sm font-black text-white shadow-sm transition hover:bg-brew-700 active:scale-[0.99]"
             >
-              Tiến hành thanh toán
+              <span>Thanh toán</span>
+              <span className="font-extrabold">{formatPrice(total)}</span>
             </Link>
             <p className="mt-3 text-center text-xs text-brew-500">
               Giỏ hàng sẽ được giữ lại nếu thanh toán chưa thành công.

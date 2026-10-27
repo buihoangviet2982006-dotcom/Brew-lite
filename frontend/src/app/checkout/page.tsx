@@ -5,23 +5,23 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Check,
   CheckCircle2,
   Coffee,
-  CreditCard,
+  Copy,
   Loader2,
   LockKeyhole,
   QrCode,
+  RefreshCw,
   ShoppingBag,
   Sparkles,
   Tag,
-  Wallet,
 } from "lucide-react";
 import { fetchApi } from "@/lib/api";
 import { useAuth } from "@/store/useAuth";
 import { useCartStore } from "@/lib/cart-store";
 import { CartItem, CreateOrderResponse } from "@/types";
 
-type PaymentMethod = "WALLET" | "CARD" | "VIETQR";
 type PickupType = "DINE_IN" | "TAKEAWAY";
 
 type PendingOrder = {
@@ -35,7 +35,15 @@ type PendingOrder = {
 
 type PaymentResponse = {
   status?: string;
+  message?: string;
   payment?: { status?: string };
+  order?: {
+    id?: string;
+    orderNumber?: string;
+    status?: string;
+    total?: number;
+    pointsEarned?: number;
+  };
 };
 
 type VietQRResponse = {
@@ -44,6 +52,9 @@ type VietQRResponse = {
   amount: number;
   transferContent: string;
   qrUrl: string;
+  bankId?: string;
+  accountNo?: string;
+  accountName?: string;
 };
 
 const PENDING_ORDER_KEY = "brewlite-pending-checkout";
@@ -79,7 +90,6 @@ export default function CheckoutPage() {
 
   const [isMounted, setIsMounted] = useState(false);
   const [pendingOrder, setPendingOrder] = useState<PendingOrder | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("WALLET");
   const [pickupType, setPickupType] = useState<PickupType>("DINE_IN");
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
@@ -93,13 +103,14 @@ export default function CheckoutPage() {
   const [useLoyalty, setUseLoyalty] = useState(false);
   const [pointsUsed, setPointsUsed] = useState(0);
 
-  // VietQR modal state
+  // VietQR state
   const [vietQrData, setVietQrData] = useState<VietQRResponse | null>(null);
   const [isLoadingQr, setIsLoadingQr] = useState(false);
+  const [copiedContent, setCopiedContent] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [paidOrder, setPaidOrder] = useState<PendingOrder | null>(null);
+  const [paidOrder, setPaidOrder] = useState<any | null>(null);
 
   useEffect(() => {
     hydrate();
@@ -108,7 +119,6 @@ export default function CheckoutPage() {
       if (savedOrder) setPendingOrder(JSON.parse(savedOrder) as PendingOrder);
     } catch (storageError) {
       console.error("Không thể khôi phục đơn thanh toán:", storageError);
-      setError("Không thể khôi phục đơn đang thanh toán. Vui lòng tải lại trang.");
     }
     setIsMounted(true);
   }, [hydrate]);
@@ -211,8 +221,8 @@ export default function CheckoutPage() {
     return order;
   };
 
-  // Xử lý lấy mã VietQR
-  const handleLoadVietQR = async () => {
+  // Tự động tải mã VietQR cho đơn hàng
+  const loadVietQR = async () => {
     if (items.length === 0 || !user) return;
     setIsLoadingQr(true);
     setError(null);
@@ -221,82 +231,91 @@ export default function CheckoutPage() {
       const qrRes = await fetchApi<VietQRResponse>(`/payments/vietqr/${order.id}`);
       setVietQrData(qrRes);
     } catch (err: any) {
-      // Mock VietQR fallback
-      const order = usablePendingOrder || {
-        id: `order-${Date.now()}`,
-        orderNumber: "#1042",
-        total: estimatedTotal,
-        userId: user!.id,
-        cartSignature,
-        idempotencyKey: createIdempotencyKey(),
-      };
-      setVietQrData({
-        success: true,
-        orderId: order.id,
-        amount: order.total,
-        transferContent: `BL${order.id.slice(0, 8).toUpperCase()}`,
-        qrUrl: `https://img.vietqr.io/image/MB-0000000000-compact2.png?amount=${order.total}&addInfo=BL${order.id.slice(0, 8)}&accountName=BREWLITE`,
-      });
+      setError(err instanceof Error ? err.message : "Không thể tải mã VietQR.");
     } finally {
       setIsLoadingQr(false);
     }
   };
 
-  // Xác nhận thanh toán (Idempotent Direct Payment)
-  const handlePayment = async () => {
-    if (isSubmitting || !user || items.length === 0) return;
+  // Tải mã QR tự động khi người dùng vào trang
+  useEffect(() => {
+    if (isMounted && isAuthenticated && items.length > 0 && !vietQrData && !paidOrder) {
+      loadVietQR();
+    }
+  }, [isMounted, isAuthenticated, items.length]);
 
-    setIsSubmitting(true);
-    setError(null);
+  const handleCopyContent = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedContent(true);
+    setTimeout(() => setCopiedContent(false), 2000);
+  };
 
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+
+  // Tự động kiểm tra trạng thái thanh toán từ hệ thống / SePay
+  const checkStatusNow = async (targetOrderId?: string) => {
+    const orderId = targetOrderId || pendingOrder?.id;
+    if (!orderId || paidOrder || isCheckingStatus) return;
+
+    setIsCheckingStatus(true);
     try {
-      const order = await ensurePendingOrder();
-
-      // Backend Prisma PaymentMethod enum: WALLET | CARD
-      const mappedMethod = paymentMethod === "CARD" ? "CARD" : "WALLET";
-
-      const paymentResponse = await fetchApi<PaymentResponse>("/payments", {
-        method: "POST",
-        headers: { "Idempotency-Key": order.idempotencyKey },
-        body: JSON.stringify({
-          orderId: order.id,
-          amount: order.total,
-          method: mappedMethod,
-        }),
-      });
-
-      const paymentStatus =
-        paymentResponse.status ?? paymentResponse.payment?.status;
-
-      if (paymentStatus !== "SUCCESS") {
-        if (paymentStatus === "FAILED") {
-          const retryableOrder = {
-            ...order,
-            idempotencyKey: createIdempotencyKey(),
-          };
-          setPendingOrder(retryableOrder);
-          sessionStorage.setItem(
-            PENDING_ORDER_KEY,
-            JSON.stringify(retryableOrder),
-          );
-        }
-        throw new Error("Thanh toán chưa thành công. Vui lòng thử lại.");
-      }
-
-      sessionStorage.removeItem(PENDING_ORDER_KEY);
-      if (getCartSignature(items) === order.cartSignature) clearCart();
-      setPaidOrder(order);
-      setVietQrData(null);
-    } catch (paymentError) {
-      setError(
-        paymentError instanceof Error
-          ? paymentError.message
-          : "Không thể kết nối đến máy chủ thanh toán.",
+      const res = await fetchApi<{ status: string; order?: any }>(
+        `/payments/status/${orderId}`,
       );
+
+      if (res.status === "PAID") {
+        sessionStorage.removeItem(PENDING_ORDER_KEY);
+        clearCart();
+        setPaidOrder(res.order || pendingOrder);
+        setVietQrData(null);
+        setError(null);
+      }
+    } catch (err: any) {
+      console.warn("Lỗi kiểm tra trạng thái thanh toán:", err);
     } finally {
-      setIsSubmitting(false);
+      setIsCheckingStatus(false);
     }
   };
+
+  const [isSimulating, setIsSimulating] = useState(false);
+
+  // Kích hoạt mô phỏng tiền về từ SePay (Dùng test/demo bài tập lớn)
+  const handleSimulateSepay = async () => {
+    if (!pendingOrder || isSimulating) return;
+    setIsSimulating(true);
+    setError(null);
+    try {
+      const res = await fetchApi<PaymentResponse>("/payments/simulate-sepay", {
+        method: "POST",
+        body: JSON.stringify({ orderId: pendingOrder.id }),
+      });
+
+      if (res.status === "PAID" || res.status === "SUCCESS") {
+        sessionStorage.removeItem(PENDING_ORDER_KEY);
+        clearCart();
+        setPaidOrder(res.order || pendingOrder);
+        setVietQrData(null);
+        setError(null);
+      } else {
+        throw new Error(res.message || "Không thể giả lập thanh toán SePay.");
+      }
+    } catch (err: any) {
+      setError(err instanceof Error ? err.message : "Lỗi khi giả lập thanh toán SePay.");
+    } finally {
+      setIsSimulating(false);
+    }
+  };
+
+  // Tự động polling kiểm tra trạng thái mỗi 2.5s khi có mã QR và đơn chờ
+  useEffect(() => {
+    if (!isMounted || !isAuthenticated || !pendingOrder?.id || paidOrder) return;
+
+    const interval = setInterval(() => {
+      checkStatusNow(pendingOrder.id);
+    }, 2500);
+
+    return () => clearInterval(interval);
+  }, [isMounted, isAuthenticated, pendingOrder?.id, paidOrder]);
 
   if (!isMounted) {
     return (
@@ -306,33 +325,36 @@ export default function CheckoutPage() {
     );
   }
 
-  // Màn hình hoàn tất thanh toán
+  // Màn hình 5: Xác nhận đặt hàng thành công (Chuẩn Wireframe Mục 7)
   if (paidOrder) {
     return (
       <section className="mx-auto flex min-h-[calc(100vh-65px)] max-w-2xl items-center p-5 pb-24">
         <div className="w-full rounded-3xl border border-emerald-200 bg-white px-6 py-10 text-center shadow-lg animate-in fade-in zoom-in-95 duration-200">
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-600">
-            <CheckCircle2 className="h-9 w-9" />
+            <CheckCircle2 className="h-10 w-10" />
           </div>
-          <p className="mt-4 text-xs font-bold uppercase tracking-[0.18em] text-emerald-700 bg-emerald-50 inline-block px-3 py-1 rounded-full border border-emerald-200">
-            Thanh toán Cashless hoàn tất
-          </p>
-          <h1 className="mt-3 text-2xl font-black text-brew-950">
-            Cảm ơn bạn đã đặt món!
+          <h1 className="mt-4 text-2xl font-black text-brew-950">
+            Đặt hàng thành công
           </h1>
-          <p className="mt-1 text-sm text-brew-600">
-            Đơn hàng đã được chuyển đến quầy pha chế của BrewLite.
+          <p className="mt-1 text-sm font-semibold text-emerald-700">
+            Mời tới quầy lấy nước
           </p>
 
           <div className="my-6 rounded-2xl bg-brew-50 p-5 border border-brew-200 shadow-inner">
             <p className="text-xs font-semibold uppercase tracking-wider text-brew-600">
-              Mã nhận món tại quầy
+              Mã đơn hàng
             </p>
             <p className="mt-1 text-4xl font-black tracking-widest text-brew-900">
               {paidOrder.orderNumber}
             </p>
-            <p className="mt-2 text-sm font-black text-brew-800">
-              {formatPrice(paidOrder.total)}
+            <div className="mt-3 flex items-center justify-center gap-2">
+              <span className="text-xs font-semibold text-brew-600">Trạng thái:</span>
+              <span className="font-black text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-300 text-xs tracking-wider">
+                PAID
+              </span>
+            </div>
+            <p className="mt-2 text-sm font-extrabold text-brew-800">
+              Tổng thanh toán: {formatPrice(paidOrder.total)}
             </p>
           </div>
 
@@ -346,22 +368,16 @@ export default function CheckoutPage() {
             <div className="flex justify-between">
               <span>Phương thức:</span>
               <span className="font-bold text-brew-900">
-                {paymentMethod === "WALLET" ? "Ví điện tử (Cashless)" : paymentMethod === "CARD" ? "Thẻ ngân hàng (Visa/ATM)" : "Quét mã VietQR"}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span>Trạng thái:</span>
-              <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                PAID (Đã thanh toán)
+                Quét mã VietQR 24/7
               </span>
             </div>
           </div>
 
           <Link
             href="/"
-            className="inline-flex rounded-xl bg-brew-600 px-6 py-3 text-sm font-bold text-white transition hover:bg-brew-700 shadow-md"
+            className="inline-flex rounded-xl bg-brew-600 px-8 py-3 text-sm font-black text-white transition hover:bg-brew-700 shadow-md active:scale-95"
           >
-            Quay lại thực đơn
+            Về trang chủ
           </Link>
         </div>
       </section>
@@ -411,11 +427,11 @@ export default function CheckoutPage() {
 
       <div className="mb-5 mt-4">
         <p className="text-xs font-bold uppercase tracking-[0.18em] text-brew-500">
-          BrewLite · Thanh toán an toàn
+          BrewLite
         </p>
         <h1 className="mt-1 text-2xl font-black text-brew-950">Màn hình Thanh toán</h1>
         <p className="mt-1 text-sm text-brew-600">
-          Xác nhận đơn món, ưu đãi voucher và phương thức thanh toán không tiền mặt.
+          Quét mã QR qua ứng dụng Ngân hàng và xác nhận nhận nước tại quầy.
         </p>
       </div>
 
@@ -429,11 +445,10 @@ export default function CheckoutPage() {
             <button
               type="button"
               onClick={() => setPickupType("DINE_IN")}
-              className={`p-3 rounded-xl border text-center font-bold text-sm transition flex flex-col items-center gap-1 ${
-                pickupType === "DINE_IN"
-                  ? "border-brew-600 bg-brew-50 text-brew-950 ring-1 ring-brew-600"
-                  : "border-zinc-200 text-zinc-600 hover:border-zinc-300"
-              }`}
+              className={`p-3 rounded-xl border text-center font-bold text-sm transition flex flex-col items-center gap-1 ${pickupType === "DINE_IN"
+                ? "border-brew-600 bg-brew-50 text-brew-950 ring-1 ring-brew-600"
+                : "border-zinc-200 text-zinc-600 hover:border-zinc-300"
+                }`}
             >
               <Coffee className="w-5 h-5 text-brew-600" />
               <span>Dùng tại quán</span>
@@ -442,11 +457,10 @@ export default function CheckoutPage() {
             <button
               type="button"
               onClick={() => setPickupType("TAKEAWAY")}
-              className={`p-3 rounded-xl border text-center font-bold text-sm transition flex flex-col items-center gap-1 ${
-                pickupType === "TAKEAWAY"
-                  ? "border-brew-600 bg-brew-50 text-brew-950 ring-1 ring-brew-600"
-                  : "border-zinc-200 text-zinc-600 hover:border-zinc-300"
-              }`}
+              className={`p-3 rounded-xl border text-center font-bold text-sm transition flex flex-col items-center gap-1 ${pickupType === "TAKEAWAY"
+                ? "border-brew-600 bg-brew-50 text-brew-950 ring-1 ring-brew-600"
+                : "border-zinc-200 text-zinc-600 hover:border-zinc-300"
+                }`}
             >
               <ShoppingBag className="w-5 h-5 text-brew-600" />
               <span>Mang đi</span>
@@ -459,7 +473,7 @@ export default function CheckoutPage() {
         <section className="rounded-2xl border border-brew-100 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="font-extrabold text-brew-950 text-sm uppercase tracking-wider">
-              2. Đơn hàng của bạn ({itemCount} món)
+              Đơn hàng của bạn ({itemCount} món)
             </h2>
             <Link href="/cart" className="text-xs font-bold text-brew-700 underline">
               Sửa giỏ hàng
@@ -493,11 +507,6 @@ export default function CheckoutPage() {
               </span>
             </div>
           ))}
-          {usablePendingOrder && (
-            <p className="mt-2 rounded-xl bg-amber-50 p-3 text-xs font-medium text-amber-800 border border-amber-200">
-              Đơn {usablePendingOrder.orderNumber} đang chờ thanh toán. Thử lại sẽ không tạo đơn mới (Idempotent).
-            </p>
-          )}
         </section>
 
         {/* 3. Ưu đãi & Điểm thưởng */}
@@ -604,98 +613,103 @@ export default function CheckoutPage() {
           </section>
         )}
 
-        {/* 5. Phương thức thanh toán Cashless */}
-        <section className="rounded-2xl border border-brew-100 bg-white p-4 shadow-sm">
-          <h2 className="text-xs font-black uppercase tracking-wider text-brew-950 mb-3">
-            5. Phương thức thanh toán không tiền mặt
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-            {/* Ví điện tử */}
-            <button
-              type="button"
-              aria-pressed={paymentMethod === "WALLET"}
-              onClick={() => {
-                setPaymentMethod("WALLET");
-                setVietQrData(null);
-              }}
-              className={`rounded-xl border p-3 text-left transition ${
-                paymentMethod === "WALLET"
-                  ? "border-brew-600 bg-brew-50 ring-1 ring-brew-600"
-                  : "border-brew-200 hover:border-brew-400"
-              }`}
-            >
-              <Wallet className="h-5 w-5 text-brew-700" />
-              <span className="mt-2 block text-sm font-bold text-brew-950">Ví điện tử</span>
-              <span className="mt-0.5 block text-xs text-brew-500">MoMo / ZaloPay</span>
-            </button>
-
-            {/* Thẻ ngân hàng */}
-            <button
-              type="button"
-              aria-pressed={paymentMethod === "CARD"}
-              onClick={() => {
-                setPaymentMethod("CARD");
-                setVietQrData(null);
-              }}
-              className={`rounded-xl border p-3 text-left transition ${
-                paymentMethod === "CARD"
-                  ? "border-brew-600 bg-brew-50 ring-1 ring-brew-600"
-                  : "border-brew-200 hover:border-brew-400"
-              }`}
-            >
-              <CreditCard className="h-5 w-5 text-brew-700" />
-              <span className="mt-2 block text-sm font-bold text-brew-950">Thẻ ngân hàng</span>
-              <span className="mt-0.5 block text-xs text-brew-500">Visa / ATM nội địa</span>
-            </button>
-
-            {/* Quét mã VietQR */}
-            <button
-              type="button"
-              aria-pressed={paymentMethod === "VIETQR"}
-              onClick={() => {
-                setPaymentMethod("VIETQR");
-                handleLoadVietQR();
-              }}
-              className={`rounded-xl border p-3 text-left transition ${
-                paymentMethod === "VIETQR"
-                  ? "border-emerald-600 bg-emerald-50 ring-1 ring-emerald-600"
-                  : "border-brew-200 hover:border-brew-400"
-              }`}
-            >
-              <QrCode className="h-5 w-5 text-emerald-700" />
-              <span className="mt-2 block text-sm font-bold text-brew-950">Quét mã VietQR</span>
-              <span className="mt-0.5 block text-xs text-brew-500">Chuyển khoản 24/7</span>
-            </button>
+        {/* 5. Phương thức thanh toán duy nhất: Quét mã VietQR */}
+        <section className="rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+              <QrCode className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-black text-brew-950">
+                Quét mã QR thanh toán
+              </h2>
+              <p className="text-xs text-brew-600">
+                Hỗ trợ tất cả ứng dụng Ngân hàng (MB, VCB, Techcombank, ...) và Ví điện tử
+              </p>
+            </div>
           </div>
 
-          {/* Khối hiển thị VietQR nếu chọn */}
-          {paymentMethod === "VIETQR" && (
-            <div className="mt-4 p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200 text-center animate-in fade-in">
-              <p className="text-xs font-bold text-emerald-900 mb-2">
-                Quét mã QR qua ứng dụng Ngân hàng để thanh toán
-              </p>
-              {isLoadingQr ? (
-                <div className="py-8 flex justify-center">
-                  <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+          {isLoadingQr ? (
+            <div className="py-12 flex flex-col items-center justify-center gap-2">
+              <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+              <p className="text-xs text-brew-600 font-medium">Đang tạo mã QR thanh toán...</p>
+            </div>
+          ) : vietQrData ? (
+            <div className="mt-4 flex flex-col items-center rounded-2xl bg-emerald-50/70 p-5 border border-emerald-200">
+              <img
+                src={vietQrData.qrUrl}
+                alt="VietQR Payment Code"
+                className="h-56 w-56 rounded-2xl border border-emerald-300 bg-white p-2.5 shadow-md"
+              />
+
+              <div className="mt-4 w-full max-w-sm rounded-xl bg-white p-3.5 border border-emerald-100 shadow-sm space-y-2 text-xs">
+                <div className="flex justify-between items-center text-zinc-600">
+                  <span>Ngân hàng thụ hưởng:</span>
+                  <span className="font-bold text-zinc-900">
+                    {vietQrData.bankId ? `${vietQrData.bankId} Bank` : "MB Bank"}
+                  </span>
                 </div>
-              ) : vietQrData ? (
-                <div className="space-y-3">
-                  <img
-                    src={vietQrData.qrUrl}
-                    alt="VietQR code"
-                    className="mx-auto h-48 w-48 rounded-xl border border-emerald-300 shadow-sm bg-white p-2"
-                  />
-                  <div className="text-xs text-emerald-800 space-y-1">
-                    <p>Nội dung CK: <span className="font-mono font-bold text-emerald-950">{vietQrData.transferContent}</span></p>
-                    <p>Số tiền: <span className="font-bold text-emerald-950">{formatPrice(vietQrData.amount)}</span></p>
+                {vietQrData.accountNo && (
+                  <div className="flex justify-between items-center text-zinc-600">
+                    <span>Số tài khoản:</span>
+                    <span className="font-bold text-zinc-900 font-mono">
+                      {vietQrData.accountNo}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center text-zinc-600">
+                  <span>Chủ tài khoản:</span>
+                  <span className="font-bold text-zinc-900">
+                    {vietQrData.accountName || "BREWLITE COFFEE"}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-zinc-600">
+                  <span>Số tiền:</span>
+                  <span className="font-black text-emerald-700 text-sm">
+                    {formatPrice(vietQrData.amount)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center border-t border-zinc-100 pt-2">
+                  <span className="text-zinc-600">Nội dung chuyển khoản:</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono font-black text-brew-900 bg-brew-50 px-2 py-0.5 rounded border border-brew-200">
+                      {vietQrData.transferContent}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyContent(vietQrData.transferContent)}
+                      className="p-1 rounded text-brew-600 hover:bg-brew-100 transition"
+                      title="Sao chép nội dung"
+                    >
+                      {copiedContent ? (
+                        <Check className="h-3.5 w-3.5 text-emerald-600" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                    </button>
                   </div>
                 </div>
-              ) : null}
+              </div>
+
+              <p className="mt-3 text-[11px] text-emerald-800 text-center">
+                Mở app ngân hàng quét mã để thanh toán tự động đúng số tiền và nội dung.
+              </p>
+            </div>
+          ) : (
+            <div className="py-6 text-center">
+              <button
+                type="button"
+                onClick={loadVietQR}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-700"
+              >
+                <QrCode className="h-4 w-4" />
+                Tải lại mã VietQR
+              </button>
             </div>
           )}
         </section>
 
-        {/* 6. Chi tiết thanh toán */}
+        {/* 6. Chi tiết thanh toán & Xác nhận */}
         <section className="rounded-2xl border border-brew-100 bg-brew-50 p-4 shadow-sm">
           <div className="space-y-1.5 text-sm text-brew-800">
             <div className="flex justify-between">
@@ -715,7 +729,7 @@ export default function CheckoutPage() {
               </div>
             )}
             <div className="flex justify-between text-xs text-zinc-500">
-              <span>Phí đóng gói & phục vụ:</span>
+              <span>Phí phục vụ:</span>
               <span className="font-bold text-emerald-700">Miễn phí</span>
             </div>
           </div>
@@ -736,28 +750,52 @@ export default function CheckoutPage() {
             </p>
           )}
 
-          <button
-            type="button"
-            onClick={handlePayment}
-            disabled={isSubmitting || !user || (items.length === 0 && !usablePendingOrder)}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brew-600 px-4 py-3.5 text-sm font-black text-white shadow-md transition hover:bg-brew-700 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.99]"
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Đang xử lý thanh toán...
-              </>
-            ) : (
-              <>
-                <LockKeyhole className="h-4 w-4" />
-                Xác nhận thanh toán {formatPrice(usablePendingOrder?.total ?? estimatedTotal)}
-              </>
-            )}
-          </button>
+          {/* Hộp trạng thái lắng nghe chuyển khoản tự động (SePay / Ngân hàng) */}
+          <div className="mt-4 rounded-2xl border border-emerald-300 bg-emerald-50/80 p-4 text-center space-y-2">
+            <div className="flex items-center justify-center gap-2 text-emerald-900 font-bold text-sm">
+              <Loader2 className="h-4 w-4 animate-spin text-emerald-600" />
+              <span>Đang chờ hệ thống ghi nhận chuyển khoản...</span>
+            </div>
+            <p className="text-xs text-emerald-800">
+              Vui lòng mở ứng dụng ngân hàng quét mã QR ở trên và chuyển chính xác số tiền.
+            </p>
+            <p className="text-[11px] text-zinc-500">
+              Hệ thống sẽ tự động chuyển sang trang nhận nước ngay khi tiền vào tài khoản (không cần bấm nút).
+            </p>
+
+            <div className="pt-2 border-t border-emerald-200/60 flex flex-col items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSimulateSepay}
+                disabled={isSimulating || !pendingOrder}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:from-emerald-700 hover:to-teal-700 active:scale-98 disabled:opacity-50 transition"
+              >
+                {isSimulating ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4 text-amber-300" />
+                )}
+                <span>Mô phỏng tiền về (SePay Webhook Test)</span>
+              </button>
+              <span className="text-[10px] text-emerald-800 font-medium">
+                Dành cho Demo / Chấm điểm: Giả lập biến động số dư SePay không cần chuyển khoản thật
+              </span>
+
+              <button
+                type="button"
+                onClick={() => checkStatusNow()}
+                disabled={isCheckingStatus}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-brew-700 hover:text-brew-950 underline disabled:opacity-50 transition mt-0.5"
+              >
+                <RefreshCw className={`h-3 w-3 ${isCheckingStatus ? "animate-spin" : ""}`} />
+                Kiểm tra lại giao dịch ngay
+              </button>
+            </div>
+          </div>
 
           <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs text-brew-500">
             <LockKeyhole className="h-3.5 w-3.5" />
-            Giao dịch được bảo vệ bằng Idempotency-Key chống thanh toán trùng lặp.
+            Tự động đối soát giao dịch ngân hàng 24/7
           </p>
         </section>
       </div>
