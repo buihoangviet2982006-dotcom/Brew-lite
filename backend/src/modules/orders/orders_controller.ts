@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Get,
   Body,
   UsePipes,
   ValidationPipe,
@@ -28,3 +29,9 @@ export class OrdersController {
     return this.ordersService.create(createOrderDto, user.id);
   }
 }
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async getMyOrders(@CurrentUser() user: { id: string }) {
+    return this.ordersService.findMyOrders(user.id);
+  }

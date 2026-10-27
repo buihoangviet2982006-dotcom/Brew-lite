@@ -42,13 +42,21 @@ export default function CartPage() {
 
   return (
     <section className="mx-auto min-h-[calc(100vh-65px)] max-w-2xl p-5 pb-28">
-      <Link
-        href="/"
-        className="inline-flex items-center gap-2 text-sm font-bold text-brew-700 hover:text-brew-950"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        Tiếp tục chọn món
-      </Link>
+      <div className="flex items-center justify-between">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-2 text-sm font-bold text-brew-700 hover:text-brew-950"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Tiếp tục chọn món
+        </Link>
+        <Link
+          href="/orders/history"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-brew-200 bg-white px-3 py-1.5 text-xs font-bold text-brew-700 shadow-sm transition hover:bg-brew-50"
+        >
+          Lịch sử đơn hàng
+        </Link>
+      </div>
 
       <div className="mb-5 mt-5 flex items-end justify-between">
         <div>
