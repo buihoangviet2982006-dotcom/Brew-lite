@@ -13,6 +13,7 @@ describe('Task 10 (b): Idempotent Payment Test (processDirectPayment with Idempo
   let testUserId: string;
   let testOrderId: string;
   let testProductId: string;
+  let testIngredientId: string;
 
   beforeAll(async () => {
     moduleRef = await Test.createTestingModule({
@@ -27,13 +28,33 @@ describe('Task 10 (b): Idempotent Payment Test (processDirectPayment with Idempo
       data: {
         name: `CF Idempotent Test ${Date.now()}`,
         price: 35000,
-        imageUrl: 'https://example.com/cf.png',
+        imageUrl:
+          'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?auto=format&fit=crop&w=600&q=80',
         stock: 20,
         version: 0,
         category: 'coffee',
       },
     });
     testProductId = product.id;
+
+    const ingredient = await prisma.ingredient.create({
+      data: {
+        name: `Nguyên liệu idempotency ${Date.now()}`,
+        unit: 'g',
+        currentQuantity: 3,
+      },
+    });
+    testIngredientId = ingredient.id;
+    await prisma.recipe.create({
+      data: {
+        productId: product.id,
+        size: 'M',
+        isProvisional: false,
+        items: {
+          create: [{ ingredientId: ingredient.id, quantity: 1 }],
+        },
+      },
+    });
 
     // 2. Tạo user mẫu
     const user = await prisma.user.create({
@@ -62,6 +83,9 @@ describe('Task 10 (b): Idempotent Payment Test (processDirectPayment with Idempo
               qty: 1,
               basePrice: 35000,
               lineTotal: 35000,
+              ingredientUsages: {
+                create: [{ ingredientId: ingredient.id, quantity: 1 }],
+              },
             },
           ],
         },
@@ -71,6 +95,19 @@ describe('Task 10 (b): Idempotent Payment Test (processDirectPayment with Idempo
   });
 
   afterAll(async () => {
+    if (prisma && testOrderId && testProductId && testIngredientId && testUserId) {
+      await prisma.$transaction(async (tx) => {
+        await tx.inventoryMovement.deleteMany({
+          where: { ingredientId: testIngredientId, orderId: testOrderId },
+        });
+        await tx.payment.deleteMany({ where: { orderId: testOrderId } });
+        await tx.order.delete({ where: { id: testOrderId } });
+        await tx.recipe.deleteMany({ where: { productId: testProductId } });
+        await tx.product.delete({ where: { id: testProductId } });
+        await tx.ingredient.delete({ where: { id: testIngredientId } });
+        await tx.user.delete({ where: { id: testUserId } });
+      });
+    }
     await moduleRef.close();
   });
 
@@ -102,5 +139,15 @@ describe('Task 10 (b): Idempotent Payment Test (processDirectPayment with Idempo
       where: { id: testOrderId },
     });
     expect(finalOrder?.status).toBe(OrderStatus.PAID);
+
+    const finalIngredient = await prisma.ingredient.findUnique({
+      where: { id: testIngredientId },
+    });
+    expect(Number(finalIngredient?.currentQuantity)).toBe(2);
+    expect(
+      await prisma.inventoryMovement.count({
+        where: { orderId: testOrderId, type: 'ORDER_DEDUCTION' },
+      }),
+    ).toBe(1);
   });
 });

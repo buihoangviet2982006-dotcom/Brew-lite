@@ -64,7 +64,7 @@ Dự án được xây dựng theo mô hình **Monorepo**, áp dụng quy trình
 | :--- | :--- | :--- |
 | **Frontend** | **Next.js 14**, React, TypeScript, TailwindCSS, Zustand | Quản lý state giỏ hàng, SSR/CSR, Responsive |
 | **Backend** | **NestJS**, TypeScript, REST API, Class-Validator, JWT | Kiến trúc module hóa, bảo mật JWT Guard |
-| **Cơ sở dữ liệu** | **PostgreSQL 16**, Prisma ORM | Quản lý quan hệ bảng, migrations dữ liệu |
+| **Cơ sở dữ liệu** | **PostgreSQL 16**, Prisma ORM | Quản lý schema bằng Prisma |
 | **Thanh toán** | Mock Payment Service | Mô phỏng xử lý Idempotent, tránh charge trùng |
 | **DevOps** | Docker Compose, Git branching, Multi-stage build | Môi trường đồng nhất dev và bàn giao |
 
@@ -76,7 +76,7 @@ Dự án được xây dựng theo mô hình **Monorepo**, áp dụng quy trình
 Brew-lite/
 ├── .github/                     # GitHub workflows / CI/CD (nếu có)
 ├── backend/                     # Backend Source Code (NestJS)
-│   ├── prisma/                  # Prisma schema và migrations
+│   ├── prisma/                  # Prisma schema và seed dữ liệu
 │   │   └── schema.prisma        # Mô hình CSDL (User, Product, Order, Payment)
 │   ├── src/
 │   │   ├── common/              # Guards, Interceptors, Filters, State Machine
@@ -84,7 +84,8 @@ Brew-lite/
 │   │   │   ├── auth/            # Module xác thực JWT, bcrypt (Task 7)
 │   │   │   ├── products/        # Module sản phẩm & menu (Task 2)
 │   │   │   ├── orders/          # Module đơn hàng (Task 6, 10)
-│   │   │   └── payments/        # Module thanh toán Mock Idempotent (Task 8)
+│   │   │   ├── payments/        # Module thanh toán Mock Idempotent (Task 8)
+│   │   │   └── inventory/       # Kho nguyên liệu, công thức và phiếu nhập
 │   │   ├── app.controller.ts    # Controller gốc (Hello/Health endpoint)
 │   │   ├── app.module.ts        # Root Module
 │   │   ├── app.service.ts       # Service gốc
@@ -212,6 +213,15 @@ docker compose up -d --build
 docker compose exec backend npx prisma db push
 docker compose exec backend npx prisma db seed
 ```
+Seed mẫu tạo công thức ước tính (được đánh dấu **TẠM**) và số tồn nguyên liệu ban đầu bằng 0. Nhập tồn thực tế qua mục **Phiếu nhập** trong màn quản trị `/admin/inventory`.
+
+Với CSDL đang có dữ liệu, `prisma db push` đồng bộ cấu trúc theo `schema.prisma` mà không cần thư mục migrations. Không chạy `prisma db seed` nếu muốn giữ dữ liệu hiện có vì seed toàn ứng dụng xóa dữ liệu trước khi tạo lại. Nếu chỉ muốn bổ sung nguyên liệu và công thức mẫu, có thể chạy chế độ seed kho:
+```bash
+cd backend
+npm run prisma:push
+npm run prisma:seed-inventory
+```
+Lệnh `prisma:seed-inventory` chạy `prisma/seed.ts` ở chế độ chỉ khởi tạo kho: không xóa đơn hàng/người dùng/sản phẩm, chỉ bổ sung nguyên liệu và công thức tạm còn thiếu. `npm run prisma:seed` (hoặc `prisma db seed`) sẽ nạp lại toàn bộ dữ liệu mẫu và xóa dữ liệu hiện có. Công thức dùng định lượng ước tính; có thể chỉnh lại sau trong màn quản trị kho.
 * **Frontend:** [http://localhost:3000](http://localhost:3000)
 * **Backend API:** [http://localhost:4000/api](http://localhost:4000/api)
 * **Backend Health Check:** [http://localhost:4000/api/health](http://localhost:4000/api/health)

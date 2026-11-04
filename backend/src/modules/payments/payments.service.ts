@@ -10,6 +10,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreatePaymentDto } from './dto/payment.dto';
 import { OrderStatus, PaymentMethod, PaymentStatus, Prisma } from '@prisma/client';
 import { assertTransition } from '../../common/orders/order-state-machine';
+import { InventoryService } from '../inventory/inventory.service';
 
 class PaymentWriteConflictError extends Error {}
 
@@ -21,7 +22,10 @@ export class PaymentsService {
     accountName: process.env.VIETQR_ACCOUNT_NAME || 'TEN CHU TAI KHOAN',
   };
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly inventory: InventoryService,
+  ) {}
 
   async generateVietQR(orderId: string, userId: string) {
     const order = await this.prisma.order.findUnique({
@@ -203,48 +207,6 @@ export class PaymentsService {
   }
 
   /**
-   * Kiểm soát tồn kho khi thanh toán bằng Transaction + Optimistic Locking (Task 10.3)
-   */
-  private async deductStockOptimistic(tx: Prisma.TransactionClient, orderId: string) {
-    const items = await tx.orderItem.findMany({
-      where: { orderId },
-    });
-
-    const productQuantities = new Map<string, number>();
-    for (const item of items) {
-      productQuantities.set(
-        item.productId,
-        (productQuantities.get(item.productId) ?? 0) + item.qty,
-      );
-    }
-
-    for (const [productId, quantity] of productQuantities.entries()) {
-      const product = await tx.product.findUnique({ where: { id: productId } });
-      if (!product || product.stock < quantity) {
-        throw new BadRequestException(
-          `Sản phẩm '${product?.name ?? productId}' không đủ tồn kho để thanh toán.`,
-        );
-      }
-
-      const updateRes = await tx.product.updateMany({
-        where: {
-          id: product.id,
-          version: product.version,
-          stock: { gte: quantity },
-        },
-        data: {
-          stock: { decrement: quantity },
-          version: { increment: 1 },
-        },
-      });
-
-      if (updateRes.count !== 1) {
-        throw new PaymentWriteConflictError();
-      }
-    }
-  }
-
-  /**
    * Helper chuyển trạng thái đơn hàng sang PAID và lưu giao dịch
    */
   private async completePaymentSuccess(
@@ -265,8 +227,7 @@ export class PaymentsService {
       // 1. Kiểm tra State Machine
       assertTransition(order.status, OrderStatus.PAID);
 
-      // 2. Trừ tồn kho bằng Optimistic Locking (Task 10.3)
-      await this.deductStockOptimistic(tx, order.id);
+      await this.inventory.deductOrder(tx, order.id);
 
       const payment = await tx.payment.create({
         data: {
@@ -388,7 +349,7 @@ export class PaymentsService {
         return await this.prisma.$transaction(async (tx) => {
           if (isSuccess) {
             assertTransition(order.status, OrderStatus.PAID);
-            await this.deductStockOptimistic(tx, order.id);
+            await this.inventory.deductOrder(tx, order.id);
 
             const payment = await tx.payment.create({
               data: {

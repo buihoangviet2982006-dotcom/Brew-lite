@@ -101,7 +101,6 @@ export class ProductsService {
       name: product.name,
       price: Number(product.price),
       imageUrl: product.imageUrl,
-      stock: product.stock,
       description: product.description ?? undefined,
       category: (product.category as ProductCategory) || ProductCategory.COFFEE,
       sizes,

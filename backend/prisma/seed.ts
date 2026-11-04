@@ -1,13 +1,26 @@
-import { PrismaClient, DiscountType, UserRole } from '@prisma/client';
+import { Prisma, PrismaClient, DiscountType, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { seedInventoryCatalog } from './inventory-catalog';
 
 const prisma = new PrismaClient();
 
 async function main() {
+  if (process.argv.includes('--inventory-only')) {
+    const inventoryCatalog = await seedInventoryCatalog(prisma);
+    console.log(
+      `Initialized ${inventoryCatalog.ingredients} ingredients and ${inventoryCatalog.recipes} recipes without resetting existing data.`,
+    );
+    return;
+  }
+
   console.log('🌱 Starting database seeding...');
 
   // 0. Xóa sạch dữ liệu cũ để tạo seed mới hoàn toàn
   console.log('🧹 Clearing old database records...');
+  await prisma.inventoryMovement.deleteMany();
+  await prisma.$executeRaw`DELETE FROM "OrderIngredientUsage"`;
+  await prisma.$executeRaw`DELETE FROM "Recipe"`;
+  await prisma.ingredient.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.orderItem.deleteMany();
   await prisma.order.deleteMany();
@@ -348,7 +361,7 @@ async function main() {
       isAvailable: true,
       description: 'Vỏ bánh ngàn lớp giòn rụm tỏa ngát hương bơ Pháp và sốt tỏi thơm nức.',
       category: 'bakery',
-      sizes: null,
+      sizes: Prisma.DbNull,
     },
     {
       id: 'prod-bk-02',
@@ -360,7 +373,7 @@ async function main() {
       isAvailable: true,
       description: 'Lớp cốt bông lan mềm tan cùng mousse chanh leo chua ngọt dịu mát.',
       category: 'bakery',
-      sizes: null,
+      sizes: Prisma.DbNull,
     },
     {
       id: 'prod-bk-03',
@@ -372,7 +385,7 @@ async function main() {
       isAvailable: true,
       description: 'Tiramisu đậm đà hương cà phê espresso và phô mai mascarpone hảo hạng.',
       category: 'bakery',
-      sizes: null,
+      sizes: Prisma.DbNull,
     },
   ];
 
@@ -384,7 +397,12 @@ async function main() {
     });
   }
 
+  const inventoryCatalog = await seedInventoryCatalog(prisma);
+
   console.log(`✅ Seeded ${products.length} products (giá 1k - 8k)`);
+  console.log(
+    `✅ Seeded ${inventoryCatalog.ingredients} ingredients and provisional recipes`,
+  );
   console.log('🎉 Seeding completed successfully!');
 }
 

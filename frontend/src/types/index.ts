@@ -18,7 +18,6 @@ export interface Product {
   name: string;
   price: number;
   imageUrl: string;
-  stock: number;
   description?: string;
   category?: 'coffee' | 'tea' | 'special' | 'bakery' | string;
   sizes?: ProductSizeItem[];
