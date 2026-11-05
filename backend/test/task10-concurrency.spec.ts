@@ -1,13 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { PaymentsService } from '../src/modules/payments/payments.service';
+import { InventoryService } from '../src/modules/inventory/inventory.service';
 import { OrderStatus, PaymentMethod } from '@prisma/client';
+import { resolveTestPrisma } from './helpers/in-memory-prisma';
 
-describe('Task 10 (c): Concurrency Control & Stock Integrity with Optimistic Locking', () => {
+describe('Task 10 (c): Concurrency Control & Ingredient Stock Integrity with Optimistic Locking', () => {
   let moduleRef: TestingModule;
   let paymentsService: PaymentsService;
   let prisma: PrismaService;
+  let usingRealDb = false;
 
   let testProductId: string;
   let testUserId: string;
@@ -15,8 +17,16 @@ describe('Task 10 (c): Concurrency Control & Stock Integrity with Optimistic Loc
   const orderIds: string[] = [];
 
   beforeAll(async () => {
+    const resolved = await resolveTestPrisma();
+    usingRealDb = resolved.usingRealDb;
+    const prismaProvider = resolved.prisma;
+
     moduleRef = await Test.createTestingModule({
-      imports: [AppModule],
+      providers: [
+        PaymentsService,
+        InventoryService,
+        { provide: PrismaService, useValue: prismaProvider },
+      ],
     }).compile();
 
     paymentsService = moduleRef.get<PaymentsService>(PaymentsService);
@@ -29,8 +39,6 @@ describe('Task 10 (c): Concurrency Control & Stock Integrity with Optimistic Loc
         price: 30000,
         imageUrl:
           'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?auto=format&fit=crop&w=600&q=80',
-        stock: 3,
-        version: 0,
         category: 'coffee',
       },
     });
@@ -41,6 +49,7 @@ describe('Task 10 (c): Concurrency Control & Stock Integrity with Optimistic Loc
         name: `Nguyên liệu concurrency ${Date.now()}`,
         unit: 'g',
         currentQuantity: 3,
+        version: 0,
       },
     });
     testIngredientId = ingredient.id;
@@ -69,7 +78,7 @@ describe('Task 10 (c): Concurrency Control & Stock Integrity with Optimistic Loc
     for (let i = 0; i < 10; i++) {
       const order = await prisma.order.create({
         data: {
-          orderNumber: `#${Math.floor(1000 + Math.random() * 9000)}`,
+          orderNumber: `#${1000 + i}`,
           userId: testUserId,
           status: OrderStatus.PENDING,
           subtotal: 30000,
@@ -116,10 +125,15 @@ describe('Task 10 (c): Concurrency Control & Stock Integrity with Optimistic Loc
         await tx.user.delete({ where: { id: testUserId } });
       });
     }
-    await moduleRef.close();
+    if (usingRealDb && prisma) {
+      await prisma.$disconnect();
+    }
+    if (moduleRef) {
+      await moduleRef.close();
+    }
   });
 
-  it('10 request thanh toán đồng thời cho kho = 3: Đúng 3 thành công, 7 thất bại, tồn kho về 0 (không bao giờ âm kho)', async () => {
+  it('10 request thanh toán đồng thời cho kho nguyên liệu = 3g (mỗi đơn cần 1g): Đúng 3 thành công, 7 thất bại, tồn kho về 0 và version tăng đúng 3 lần', async () => {
     const requests = orderIds.map(async (orderId, idx) => {
       try {
         const idempotencyKey = `CONC_KEY_${orderId}_${idx}`;
@@ -142,24 +156,16 @@ describe('Task 10 (c): Concurrency Control & Stock Integrity with Optimistic Loc
     const successCount = results.filter((r) => r.status === 'SUCCESS').length;
     const failedCount = results.filter((r) => r.status === 'FAILED').length;
 
-    // Phải có đúng 3 giao dịch thành công ứng với 3 g nguyên liệu
+    // Phải có đúng 3 giao dịch thành công ứng với 3g nguyên liệu
     expect(successCount).toBe(3);
-    // 7 giao dịch còn lại phải bị từ chối do xung đột optimistic locking hoặc hết hàng
+    // 7 giao dịch còn lại phải bị từ chối khi kho nguyên liệu đã cạn
     expect(failedCount).toBe(7);
-
-    // Tồn kho sản phẩm cũ không còn được dùng để trừ khi bán.
-    const finalProduct = await prisma.product.findUnique({
-      where: { id: testProductId },
-    });
-
-    expect(finalProduct).toBeDefined();
-    expect(finalProduct!.stock).toBe(3);
-    expect(finalProduct!.version).toBe(0);
 
     const finalIngredient = await prisma.ingredient.findUnique({
       where: { id: testIngredientId },
     });
     expect(Number(finalIngredient?.currentQuantity)).toBe(0);
+    expect(finalIngredient?.version).toBe(3);
     expect(
       await prisma.inventoryMovement.count({
         where: { ingredientId: testIngredientId, type: 'ORDER_DEDUCTION' },

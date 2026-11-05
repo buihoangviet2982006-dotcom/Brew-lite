@@ -72,7 +72,7 @@ export class CreateOrderDto {
   @Type(() => Number)
   @IsInt({ message: 'Số điểm sử dụng (pointsUsed) phải là một số nguyên' })
   @Min(0, { message: 'Số điểm sử dụng (pointsUsed) phải là một số nguyên không âm' })
-  pointsUsed = 0;
+  pointsUsed?: number = 0;
 
   @IsOptional()
   @IsString({ message: 'Ghi chú (note) phải là chuỗi' })

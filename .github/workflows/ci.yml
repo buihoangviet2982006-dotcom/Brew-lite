@@ -1,0 +1,80 @@
+name: BrewLite CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'sprint/**'
+      - 'feature/**'
+      - 'fix/**'
+      - 'hotfix/**'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  test-and-build:
+    name: Test & Build (Backend + Frontend)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: brewlite_admin
+          POSTGRES_PASSWORD: brewlite_secure_password
+          POSTGRES_DB: brewlite_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://brewlite_admin:brewlite_secure_password@localhost:5432/brewlite_db?schema=public
+      JWT_SECRET: ci_test_jwt_secret_brewlite_2026
+      JWT_EXPIRATION: 7d
+      NEXT_PUBLIC_API_URL: http://localhost:4000/api
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm install
+          npm install --prefix backend
+          npm install --prefix frontend
+
+      - name: Generate Prisma Client & Push Schema
+        working-directory: ./backend
+        run: |
+          npx prisma generate
+          npx prisma db push
+
+      - name: Verify Database Seed
+        working-directory: ./backend
+        run: npm run prisma:seed
+
+      - name: Run All Backend Unit & Integration Tests (Tasks 1 - 10)
+        working-directory: ./backend
+        run: npm test
+
+      - name: Build Backend (NestJS)
+        working-directory: ./backend
+        run: npm run build
+
+      - name: Build Frontend (Next.js)
+        working-directory: ./frontend
+        run: npm run build
+

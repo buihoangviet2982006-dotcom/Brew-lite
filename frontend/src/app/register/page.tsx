@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Coffee } from "lucide-react";
+import { useAuth } from "@/store/useAuth";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
 
-export default function RegisterPage() {
+function RegisterForm() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -16,6 +17,9 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
 
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectParam = searchParams.get("redirect");
+  const login = useAuth((state) => state.login);
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,7 +33,6 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      // Payload đã loại bỏ trường 'name' thừa để tránh lỗi ValidationPipe từ NestJS
       const payload = {
         email: email.trim(),
         password: password,
@@ -51,8 +54,21 @@ export default function RegisterPage() {
         throw new Error(data.message || "Đăng ký không thành công!");
       }
 
-      alert("Đăng ký tài khoản thành công! Vui lòng đăng nhập.");
-      router.push("/login");
+      const realToken = data.token || data.accessToken || data.access_token;
+      const realUser = data.user || {
+        id: data.id,
+        email: email.trim(),
+        fullName: fullName.trim(),
+        role: "CUSTOMER",
+        loyaltyPoints: 0,
+      };
+
+      if (realToken && realUser) {
+        login(realUser, realToken);
+      }
+
+      // Tự động chuyển hướng ngay sang trang chủ
+      router.push("/");
     } catch (err: any) {
       setError(err.message || "Lỗi kết nối máy chủ!");
     } finally {
@@ -134,10 +150,21 @@ export default function RegisterPage() {
 
       <p className="mt-6 text-sm text-brew-600">
         Đã có tài khoản?{" "}
-        <Link href="/login" className="font-bold text-brew-800 hover:underline">
+        <Link
+          href={`/login${redirectParam ? `?redirect=${encodeURIComponent(redirectParam)}` : ""}`}
+          className="font-bold text-brew-800 hover:underline"
+        >
           Đăng nhập
         </Link>
       </p>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[80vh] flex items-center justify-center text-brew-700">Đang tải...</div>}>
+      <RegisterForm />
+    </Suspense>
   );
 }

@@ -15,8 +15,7 @@
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "prisma:seed": "ts-node prisma/seed.ts",
-    "prisma:seed-inventory": "ts-node prisma/seed.ts --inventory-only",
-    "test": "jest --rootDir .",
+    "test": "jest --rootDir . --runInBand",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:e2e": "jest --config ./test/jest-e2e.json"

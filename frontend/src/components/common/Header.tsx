@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { ShoppingCart, Coffee, UserCircle, LogOut, Package } from "lucide-react";
+import { ShoppingCart, Coffee, UserCircle, LogOut, ClipboardList } from "lucide-react";
 import Link from "next/link";
 import { useCartStore } from "@/lib/cart-store";
 import { useAuth } from "@/store/useAuth";
@@ -34,15 +34,13 @@ export default function Header() {
       <div className="flex items-center gap-3">
         {isAuthenticated && user ? (
           <div className="flex items-center gap-2">
-            {user.role === "ADMIN" && (
-              <Link
-                href="/admin/inventory"
-                title="Quản lý kho"
-                className="rounded-lg p-1.5 text-brew-700 hover:bg-brew-50"
-              >
-                <Package className="h-4 w-4" />
-              </Link>
-            )}
+            <Link
+              href="/orders/history"
+              title="Lịch sử đơn hàng"
+              className="rounded-lg p-1.5 text-brew-700 hover:bg-brew-50 transition"
+            >
+              <ClipboardList className="h-4 w-4" />
+            </Link>
             <div className="w-8 h-8 bg-brew-100 rounded-full flex items-center justify-center text-brew-800 font-bold border border-brew-200">
               {displayName.charAt(0).toUpperCase()}
             </div>

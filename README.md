@@ -85,7 +85,7 @@ Brew-lite/
 │   │   │   ├── products/        # Module sản phẩm & menu (Task 2)
 │   │   │   ├── orders/          # Module đơn hàng (Task 6, 10)
 │   │   │   ├── payments/        # Module thanh toán Mock Idempotent (Task 8)
-│   │   │   └── inventory/       # Kho nguyên liệu, công thức và phiếu nhập
+│   │   │   └── inventory/       # Kho nguyên liệu & định lượng công thức (Task 10.3)
 │   │   ├── app.controller.ts    # Controller gốc (Hello/Health endpoint)
 │   │   ├── app.module.ts        # Root Module
 │   │   ├── app.service.ts       # Service gốc
@@ -213,15 +213,7 @@ docker compose up -d --build
 docker compose exec backend npx prisma db push
 docker compose exec backend npx prisma db seed
 ```
-Seed mẫu tạo công thức ước tính (được đánh dấu **TẠM**) và số tồn nguyên liệu ban đầu bằng 0. Nhập tồn thực tế qua mục **Phiếu nhập** trong màn quản trị `/admin/inventory`.
-
-Với CSDL đang có dữ liệu, `prisma db push` đồng bộ cấu trúc theo `schema.prisma` mà không cần thư mục migrations. Không chạy `prisma db seed` nếu muốn giữ dữ liệu hiện có vì seed toàn ứng dụng xóa dữ liệu trước khi tạo lại. Nếu chỉ muốn bổ sung nguyên liệu và công thức mẫu, có thể chạy chế độ seed kho:
-```bash
-cd backend
-npm run prisma:push
-npm run prisma:seed-inventory
-```
-Lệnh `prisma:seed-inventory` chạy `prisma/seed.ts` ở chế độ chỉ khởi tạo kho: không xóa đơn hàng/người dùng/sản phẩm, chỉ bổ sung nguyên liệu và công thức tạm còn thiếu. `npm run prisma:seed` (hoặc `prisma db seed`) sẽ nạp lại toàn bộ dữ liệu mẫu và xóa dữ liệu hiện có. Công thức dùng định lượng ước tính; có thể chỉnh lại sau trong màn quản trị kho.
+Seed mẫu tự động khởi tạo danh sách người dùng mẫu (`customer@brewlite.vn`, `barista@brewlite.vn`), menu sản phẩm, topping, mã giảm giá (`BREWLITE10`, `BANMOI`), danh mục nguyên liệu (`Ingredient`) kèm số lượng tồn kho ban đầu và định lượng công thức (`Recipe`) cho từng món/size/topping.
 * **Frontend:** [http://localhost:3000](http://localhost:3000)
 * **Backend API:** [http://localhost:4000/api](http://localhost:4000/api)
 * **Backend Health Check:** [http://localhost:4000/api/health](http://localhost:4000/api/health)

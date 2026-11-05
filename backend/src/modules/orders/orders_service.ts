@@ -9,7 +9,10 @@ import { Prisma, OrderStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateOrderDto } from './dto/create_order_dto';
 import { assertTransition } from '../../common/orders/order-state-machine';
-import { InventoryService } from '../inventory/inventory.service';
+import {
+  InventoryService,
+  OptimisticLockConflictError,
+} from '../inventory/inventory.service';
 
 const POINT_VALUE_VND = 10;
 const ORDER_NUMBER_ATTEMPTS = 5;
@@ -149,64 +152,66 @@ export class OrdersService {
           const toppingsById = new Map(toppings.map((topping) => [topping.id, topping]));
 
           // 5. Xác minh sản phẩm, size, topping và tính giá từng dòng từ database.
-          const prepared = await Promise.all(dto.items.map(async (item) => {
-            const product = productsById.get(item.productId);
-            if (!product) {
-              throw new NotFoundException(
-                `Không tìm thấy sản phẩm '${item.productId}'.`,
-              );
-            }
-            if (!product.isAvailable) {
-              throw new BadRequestException(
-                `Sản phẩm '${product.name}' hiện đã ngừng bán.`,
-              );
-            }
-
-            const basePrice = this.getProductPrice(product, item.size);
-            const toppingSnapshots = (item.toppings ?? []).map((selection) => {
-              const topping = toppingsById.get(selection.toppingId);
-              if (!topping) {
+          const prepared = await Promise.all(
+            dto.items.map(async (item) => {
+              const product = productsById.get(item.productId);
+              if (!product) {
+                throw new NotFoundException(
+                  `Không tìm thấy sản phẩm '${item.productId}'.`,
+                );
+              }
+              if (!product.isAvailable) {
                 throw new BadRequestException(
-                  `Topping '${selection.toppingId}' không tồn tại hoặc đã ngừng bán.`,
+                  `Sản phẩm '${product.name}' hiện đã ngừng bán.`,
                 );
               }
 
+              const basePrice = this.getProductPrice(product, item.size);
+              const toppingSnapshots = (item.toppings ?? []).map((selection) => {
+                const topping = toppingsById.get(selection.toppingId);
+                if (!topping) {
+                  throw new BadRequestException(
+                    `Topping '${selection.toppingId}' không tồn tại hoặc đã ngừng bán.`,
+                  );
+                }
+
+                return {
+                  toppingId: topping.id,
+                  name: topping.name,
+                  price: Number(topping.price),
+                };
+              });
+
+              const toppingTotal = toppingSnapshots.reduce(
+                (total, topping) => total.plus(topping.price),
+                new Prisma.Decimal(0),
+              );
+              const lineTotal = basePrice.plus(toppingTotal).mul(item.qty);
+              const ingredientUsages = await this.inventory.getOrderItemUsage(
+                tx,
+                product.id,
+                item.size,
+                toppingSnapshots.map((topping) => topping.toppingId),
+                item.qty,
+              );
+
               return {
-                toppingId: topping.id,
-                name: topping.name,
-                price: Number(topping.price),
-              };
-            });
-
-            const toppingTotal = toppingSnapshots.reduce(
-              (total, topping) => total.plus(topping.price),
-              new Prisma.Decimal(0),
-            );
-            const lineTotal = basePrice.plus(toppingTotal).mul(item.qty);
-            const ingredientUsages = await this.inventory.getOrderItemUsage(
-              tx,
-              product.id,
-              item.size,
-              toppingSnapshots.map((topping) => topping.toppingId),
-              item.qty,
-            );
-
-            return {
-              item: {
-                productId: product.id,
-                size: item.size,
-                basePrice,
-                qty: item.qty,
-                lineTotal,
-                toppings: toppingSnapshots,
-                ingredientUsages: {
-                  create: ingredientUsages,
+                item: {
+                  productId: product.id,
+                  size: item.size,
+                  basePrice,
+                  qty: item.qty,
+                  lineTotal,
+                  toppings: toppingSnapshots,
+                  ingredientUsages: {
+                    create: ingredientUsages,
+                  },
                 },
-              },
-              lineTotal,
-              ingredientUsages,
-            };
-          }));
+                lineTotal,
+                ingredientUsages,
+              };
+            }),
+          );
 
           await this.inventory.assertAvailable(
             tx,
@@ -334,7 +339,6 @@ export class OrdersService {
           },
         };
       } catch (error) {
-        // Các lỗi khác (validation, database, thiếu dữ liệu) phải trả về caller.
         if (
           this.isOrderNumberCollision(error) &&
           attempt < ORDER_NUMBER_ATTEMPTS - 1
@@ -350,7 +354,7 @@ export class OrdersService {
 
   /**
    * Được bộ phận thanh toán gọi sau khi giao dịch thành công.
-   * Tồn kho, lượt dùng mã giảm giá, điểm thành viên và trạng thái đơn được cập nhật cùng lúc.
+   * Tồn kho nguyên liệu, lượt dùng mã giảm giá, điểm thành viên và trạng thái đơn được cập nhật cùng lúc.
    */
   async markAsPaid(orderId: string) {
     for (let attempt = 0; attempt < PAYMENT_ATTEMPTS; attempt += 1) {
@@ -376,11 +380,7 @@ export class OrdersService {
             };
           }
 
-          if (order.status !== 'PENDING' && order.status !== 'PAYMENT_FAILED') {
-            throw new BadRequestException(
-              'Đơn hàng không ở trạng thái có thể thanh toán.',
-            );
-          }
+          assertTransition(order.status, OrderStatus.PAID);
 
           await this.inventory.deductOrder(tx, order.id);
 
@@ -463,9 +463,19 @@ export class OrdersService {
           };
         });
       } catch (error) {
-        if (!(error instanceof PaymentWriteConflictError)) {
-          throw error;
+        if (
+          error instanceof PaymentWriteConflictError ||
+          error instanceof OptimisticLockConflictError
+        ) {
+          if (attempt < PAYMENT_ATTEMPTS - 1) {
+            await new Promise((res) => setTimeout(res, 20 + Math.random() * 40));
+            continue;
+          }
+          throw new ConflictException(
+            'Dữ liệu vừa được cập nhật bởi một giao dịch khác. Vui lòng thử lại.',
+          );
         }
+        throw error;
       }
     }
 
@@ -579,8 +589,10 @@ export class OrdersService {
     nextStatus: OrderStatus,
     user: { id: string; role?: string },
   ) {
-    if (user.role !== 'ADMIN' && user.role !== 'BARISTA') {
-      throw new ForbiddenException('Chỉ nhân viên mới được cập nhật trạng thái đơn hàng.');
+    if (user.role !== 'BARISTA') {
+      throw new ForbiddenException(
+        'Chỉ nhân viên pha chế (Barista) mới được cập nhật trạng thái đơn hàng.',
+      );
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -592,6 +604,21 @@ export class OrdersService {
       assertTransition(order.status, nextStatus);
       if (order.status === 'PAID' && nextStatus === 'CANCELLED') {
         await this.inventory.reverseOrder(tx, order.id, user.id);
+
+        if (order.voucherId) {
+          await tx.voucher.updateMany({
+            where: { id: order.voucherId, usedCount: { gt: 0 } },
+            data: { usedCount: { decrement: 1 } },
+          });
+        }
+
+        const pointsDelta = order.pointsUsed - order.pointsEarned;
+        if (pointsDelta !== 0) {
+          await tx.user.update({
+            where: { id: order.userId },
+            data: { loyaltyPoints: { increment: pointsDelta } },
+          });
+        }
       }
 
       const update = await tx.order.updateMany({

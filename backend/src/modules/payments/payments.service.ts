@@ -10,7 +10,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreatePaymentDto } from './dto/payment.dto';
 import { OrderStatus, PaymentMethod, PaymentStatus, Prisma } from '@prisma/client';
 import { assertTransition } from '../../common/orders/order-state-machine';
-import { InventoryService } from '../inventory/inventory.service';
+import {
+  InventoryService,
+  OptimisticLockConflictError,
+} from '../inventory/inventory.service';
 
 class PaymentWriteConflictError extends Error {}
 
@@ -33,19 +36,27 @@ export class PaymentsService {
     });
 
     if (!order) throw new NotFoundException(`Không tìm thấy đơn hàng ${orderId}`);
-    if (order.userId !== userId) throw new ForbiddenException('Bạn không có quyền thanh toán đơn hàng này');
-    
-    if (order.status !== OrderStatus.PENDING && order.status !== OrderStatus.PAYMENT_FAILED) {
+    if (order.userId !== userId)
+      throw new ForbiddenException('Bạn không có quyền thanh toán đơn hàng này');
+
+    if (
+      order.status !== OrderStatus.PENDING &&
+      order.status !== OrderStatus.PAYMENT_FAILED
+    ) {
       throw new BadRequestException(`Đơn hàng đang ở trạng thái ${order.status}`);
     }
 
     const amount = Number(order.total);
     const transferContent = `BL${order.id.slice(0, 8).toUpperCase()}`;
     const bankId = process.env.VIETQR_BANK_ID || this.vietQrConfig.bankId || 'MB';
-    const accountNo = process.env.VIETQR_ACCOUNT_NO || this.vietQrConfig.accountNo || '0000000000';
-    const accountName = process.env.VIETQR_ACCOUNT_NAME || this.vietQrConfig.accountName || 'BREWLITE COFFEE';
+    const accountNo =
+      process.env.VIETQR_ACCOUNT_NO || this.vietQrConfig.accountNo || '0000000000';
+    const accountName =
+      process.env.VIETQR_ACCOUNT_NAME ||
+      this.vietQrConfig.accountName ||
+      'BREWLITE COFFEE';
     const accountNameEncoded = encodeURIComponent(accountName);
-    
+
     const qrUrl = `https://img.vietqr.io/image/${bankId}-${accountNo}-compact2.png?amount=${amount}&addInfo=${transferContent}&accountName=${accountNameEncoded}`;
 
     return {
@@ -62,7 +73,6 @@ export class PaymentsService {
 
   /**
    * Tự động kiểm tra trạng thái thanh toán của đơn hàng (Polling realtime).
-   * Nếu có cấu hình SEPAY_API_KEY, backend sẽ tự động truy vấn SePay để đối soát giao dịch ngân hàng thật.
    */
   async checkPaymentStatus(orderId: string, userId: string) {
     const order = await this.prisma.order.findUnique({
@@ -71,9 +81,9 @@ export class PaymentsService {
     });
 
     if (!order) throw new NotFoundException(`Không tìm thấy đơn hàng ${orderId}`);
-    if (order.userId !== userId) throw new ForbiddenException('Bạn không có quyền xem đơn hàng này');
+    if (order.userId !== userId)
+      throw new ForbiddenException('Bạn không có quyền xem đơn hàng này');
 
-    // Nếu đơn đã được cập nhật thành công trước đó
     if (order.status === OrderStatus.PAID) {
       return {
         status: OrderStatus.PAID,
@@ -87,16 +97,18 @@ export class PaymentsService {
       };
     }
 
-    // Nếu đơn đang PENDING và có SePay API Key, tự động truy vấn giao dịch ngân hàng
     const sepayApiKey = process.env.SEPAY_API_KEY?.trim();
     if (sepayApiKey && order.status === OrderStatus.PENDING) {
       try {
-        const response = await fetch('https://my.sepay.vn/userapi/transactions/list?limit=20', {
-          headers: {
-            Authorization: `Bearer ${sepayApiKey}`,
-            'Content-Type': 'application/json',
+        const response = await fetch(
+          'https://my.sepay.vn/userapi/transactions/list?limit=20',
+          {
+            headers: {
+              Authorization: `Bearer ${sepayApiKey}`,
+              'Content-Type': 'application/json',
+            },
           },
-        });
+        );
 
         if (response.ok) {
           const data = await response.json();
@@ -106,7 +118,11 @@ export class PaymentsService {
           const orderTotal = Number(order.total);
 
           const matchedTx = transactions.find((tx) => {
-            const content = (tx.transaction_content || tx.content || '').toUpperCase();
+            const content = (
+              tx.transaction_content ||
+              tx.content ||
+              ''
+            ).toUpperCase();
             const amountIn = Number(tx.amount_in || tx.transferAmount || 0);
             return content.includes(expectedContentCode) && amountIn >= orderTotal;
           });
@@ -118,7 +134,12 @@ export class PaymentsService {
               matchedTx.id?.toString() ||
               `SEPAY_${Date.now()}`;
 
-            return await this.completePaymentSuccess(order, refCode, PaymentMethod.WALLET, 'SEPAY_AUTO');
+            return await this.completePaymentSuccess(
+              order,
+              refCode,
+              PaymentMethod.WALLET,
+              'SEPAY_AUTO',
+            );
           }
         }
       } catch (err) {
@@ -142,20 +163,26 @@ export class PaymentsService {
    */
   async handleSepayWebhook(payload: any, authHeader?: string) {
     if (process.env.SEPAY_WEBHOOK_TOKEN) {
-      const token = authHeader?.replace('Apikey ', '').replace('Bearer ', '').trim();
+      const token = authHeader
+        ?.replace('Apikey ', '')
+        .replace('Bearer ', '')
+        .trim();
       if (token !== process.env.SEPAY_WEBHOOK_TOKEN.trim()) {
         throw new UnauthorizedException('Sai Webhook Token');
       }
     }
 
-    const content = (payload.content || payload.transaction_content || '').toUpperCase();
+    const content = (
+      payload.content ||
+      payload.transaction_content ||
+      ''
+    ).toUpperCase();
     const amount = Number(payload.transferAmount || payload.amount_in || 0);
 
     if (!content || amount <= 0) {
       return { success: false, message: 'Dữ liệu giao dịch không hợp lệ' };
     }
 
-    // Trích xuất mã đơn từ nội dung chuyển khoản: dạng BLxxxxxxxx
     const match = content.match(/BL([A-Z0-9]{8})/);
     let order = null;
     if (match) {
@@ -175,7 +202,12 @@ export class PaymentsService {
           payload.id?.toString() ||
           `SEPAY_WH_${Date.now()}`;
 
-        await this.completePaymentSuccess(order, refCode, PaymentMethod.WALLET, 'SEPAY_WH');
+        await this.completePaymentSuccess(
+          order,
+          refCode,
+          PaymentMethod.WALLET,
+          'SEPAY_WH',
+        );
         return { success: true, orderId: order.id, status: 'PAID' };
       }
     }
@@ -191,7 +223,8 @@ export class PaymentsService {
       where: { id: orderId },
     });
     if (!order) throw new NotFoundException(`Không tìm thấy đơn hàng ${orderId}`);
-    if (order.userId !== userId) throw new ForbiddenException('Bạn không có quyền thanh toán đơn hàng này');
+    if (order.userId !== userId)
+      throw new ForbiddenException('Bạn không có quyền thanh toán đơn hàng này');
 
     if (order.status === OrderStatus.PAID) {
       return { status: OrderStatus.PAID, order };
@@ -204,6 +237,91 @@ export class PaymentsService {
       PaymentMethod.WALLET,
       'SEPAY_SIM',
     );
+  }
+
+  /**
+   * Helper thực thi cập nhật Voucher, Điểm thưởng và Trạng thái đơn trong transaction
+   */
+  private async applyOrderPaidRewardsAndDiscounts(
+    tx: Prisma.TransactionClient,
+    order: {
+      id: string;
+      userId: string;
+      status: OrderStatus;
+      total: Prisma.Decimal | number;
+      voucherId?: string | null;
+      pointsUsed?: number;
+    },
+  ): Promise<number> {
+    if (order.voucherId) {
+      const voucher = await tx.voucher.findUnique({
+        where: { id: order.voucherId },
+      });
+      if (!voucher || !voucher.isActive) {
+        throw new BadRequestException('Voucher của đơn hàng không còn hợp lệ.');
+      }
+      if (
+        voucher.usageLimit !== null &&
+        voucher.usedCount >= voucher.usageLimit
+      ) {
+        throw new BadRequestException(
+          'Voucher đã hết lượt sử dụng trước khi thanh toán.',
+        );
+      }
+
+      if (typeof tx.voucher.updateMany === 'function') {
+        const voucherUpdate = await tx.voucher.updateMany({
+          where: {
+            id: voucher.id,
+            isActive: true,
+            ...(voucher.usageLimit === null
+              ? {}
+              : { usedCount: { lt: voucher.usageLimit } }),
+          },
+          data: { usedCount: { increment: 1 } },
+        });
+        if (voucherUpdate.count !== 1) {
+          throw new PaymentWriteConflictError();
+        }
+      } else {
+        await tx.voucher.update({
+          where: { id: order.voucherId },
+          data: { usedCount: { increment: 1 } },
+        });
+      }
+    }
+
+    const pointsUsed = order.pointsUsed ?? 0;
+    if (pointsUsed > 0) {
+      if (typeof tx.user.updateMany === 'function') {
+        const pointsUpdate = await tx.user.updateMany({
+          where: {
+            id: order.userId,
+            loyaltyPoints: { gte: pointsUsed },
+          },
+          data: { loyaltyPoints: { decrement: pointsUsed } },
+        });
+        if (pointsUpdate.count !== 1) {
+          throw new BadRequestException(
+            'Bạn không còn đủ điểm tích lũy để thanh toán đơn hàng này.',
+          );
+        }
+      } else {
+        await tx.user.update({
+          where: { id: order.userId },
+          data: { loyaltyPoints: { decrement: pointsUsed } },
+        });
+      }
+    }
+
+    // Tích điểm thưởng cho khách: 10.000đ = 1 điểm (Task 10.4)
+    const earnedPoints = Math.floor(Number(order.total) / 10000);
+    await tx.user.update({
+      where: { id: order.userId },
+      data: { loyaltyPoints: { increment: earnedPoints } },
+    });
+
+    return earnedPoints;
   }
 
   /**
@@ -240,23 +358,11 @@ export class PaymentsService {
         },
       });
 
-      const earnedPoints = Math.floor(Number(order.total) / 10000);
+      const earnedPoints = await this.applyOrderPaidRewardsAndDiscounts(tx, order);
       const updatedOrder = await tx.order.update({
         where: { id: order.id },
         data: { status: OrderStatus.PAID, pointsEarned: earnedPoints },
       });
-
-      await tx.user.update({
-        where: { id: order.userId },
-        data: { loyaltyPoints: { increment: earnedPoints } },
-      });
-
-      if (order.voucherId) {
-        await tx.voucher.update({
-          where: { id: order.voucherId },
-          data: { usedCount: { increment: 1 } },
-        });
-      }
 
       return {
         status: OrderStatus.PAID,
@@ -315,19 +421,28 @@ export class PaymentsService {
       };
     }
 
-    const order = await this.prisma.order.findUnique({ where: { id: dto.orderId } });
+    const order = await this.prisma.order.findUnique({
+      where: { id: dto.orderId },
+    });
     if (!order) {
       throw new NotFoundException(`Không tìm thấy đơn hàng ${dto.orderId}`);
     }
     if (order.userId !== userId) {
-      throw new ForbiddenException('Bạn không có quyền thanh toán đơn hàng này');
+      throw new ForbiddenException(
+        'Bạn không có quyền thanh toán đơn hàng này',
+      );
     }
 
     // Kiểm tra Order State Machine theo đúng đề bài Mục 9.1
     if (order.status === OrderStatus.PAID) {
-      throw new BadRequestException('Đơn hàng này đã được thanh toán thành công trước đó.');
+      throw new BadRequestException(
+        'Đơn hàng này đã được thanh toán thành công trước đó.',
+      );
     }
-    if (order.status !== OrderStatus.PENDING && order.status !== OrderStatus.PAYMENT_FAILED) {
+    if (
+      order.status !== OrderStatus.PENDING &&
+      order.status !== OrderStatus.PAYMENT_FAILED
+    ) {
       throw new BadRequestException(
         `Đơn hàng đang ở trạng thái '${order.status}', không thể thực hiện thanh toán.`,
       );
@@ -362,25 +477,14 @@ export class PaymentsService {
               },
             });
 
-            // Tích điểm thưởng cho khách: 10.000đ = 1 điểm (Task 10.4)
-            const earnedPoints = Math.floor(Number(dto.amount) / 10000);
+            const earnedPoints = await this.applyOrderPaidRewardsAndDiscounts(
+              tx,
+              order,
+            );
             const updatedOrder = await tx.order.update({
               where: { id: order.id },
               data: { status: OrderStatus.PAID, pointsEarned: earnedPoints },
             });
-
-            await tx.user.update({
-              where: { id: order.userId },
-              data: { loyaltyPoints: { increment: earnedPoints } },
-            });
-
-            // Nếu có voucher, tăng số lượt đã sử dụng
-            if (order.voucherId) {
-              await tx.voucher.update({
-                where: { id: order.voucherId },
-                data: { usedCount: { increment: 1 } },
-              });
-            }
 
             return {
               status: 'SUCCESS',
@@ -412,7 +516,8 @@ export class PaymentsService {
 
             return {
               status: 'FAILED',
-              message: 'Giao dịch thanh toán không thành công. Giỏ hàng của bạn được giữ nguyên để có thể thử lại.',
+              message:
+                'Giao dịch thanh toán không thành công. Giỏ hàng của bạn được giữ nguyên để có thể thử lại.',
               payment,
               order: {
                 id: updatedOrder.id,
@@ -424,13 +529,20 @@ export class PaymentsService {
           }
         });
       } catch (error) {
-        if (error instanceof PaymentWriteConflictError && attempt < MAX_RETRIES - 1) {
+        if (
+          (error instanceof PaymentWriteConflictError ||
+            error instanceof OptimisticLockConflictError) &&
+          attempt < MAX_RETRIES - 1
+        ) {
           await new Promise((res) => setTimeout(res, 20 + Math.random() * 40));
           continue;
         }
-        if (error instanceof PaymentWriteConflictError) {
+        if (
+          error instanceof PaymentWriteConflictError ||
+          error instanceof OptimisticLockConflictError
+        ) {
           throw new ConflictException(
-            'Dữ liệu sản phẩm vừa được cập nhật bởi một giao dịch khác. Vui lòng thử lại.',
+            'Dữ liệu nguyên liệu vừa được cập nhật bởi một giao dịch khác. Vui lòng thử lại.',
           );
         }
         throw error;

@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Loader2, Minus, Plus, ShoppingBag, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, LogIn, Minus, Plus, ShieldAlert, ShoppingBag, Trash2 } from "lucide-react";
 import { CartItem } from "@/types";
 import { useCartStore } from "@/lib/cart-store";
+import { useAuth } from "@/store/useAuth";
 
 function formatPrice(price: number): string {
   return new Intl.NumberFormat("vi-VN", {
@@ -26,8 +27,12 @@ export default function CartPage() {
   const items = useCartStore((state) => state.items);
   const setItemQuantity = useCartStore((state) => state.setItemQuantity);
   const removeItem = useCartStore((state) => state.removeItem);
+  const { isAuthenticated, hydrate } = useAuth();
 
-  useEffect(() => setIsMounted(true), []);
+  useEffect(() => {
+    hydrate();
+    setIsMounted(true);
+  }, [hydrate]);
 
   if (!isMounted) {
     return (
@@ -160,15 +165,28 @@ export default function CartPage() {
               <span>Tổng cộng</span>
               <span>{formatPrice(total)}</span>
             </div>
+
+            {!isAuthenticated && (
+              <div className="mt-3.5 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-800">
+                <ShieldAlert className="h-4 w-4 shrink-0 text-amber-600" />
+                <span>Bạn cần đăng nhập để tích điểm thưởng và hoàn tất đơn hàng.</span>
+              </div>
+            )}
+
             <Link
-              href="/checkout"
+              href={isAuthenticated ? "/checkout" : "/login?redirect=/checkout"}
               className="mt-4 flex w-full items-center justify-between rounded-xl bg-brew-600 px-5 py-3.5 text-sm font-black text-white shadow-sm transition hover:bg-brew-700 active:scale-[0.99]"
             >
-              <span>Thanh toán</span>
+              <div className="flex items-center gap-2">
+                {!isAuthenticated && <LogIn className="h-4 w-4" />}
+                <span>{isAuthenticated ? "Tiến hành thanh toán" : "Đăng nhập để thanh toán"}</span>
+              </div>
               <span className="font-extrabold">{formatPrice(total)}</span>
             </Link>
             <p className="mt-3 text-center text-xs text-brew-500">
-              Giỏ hàng sẽ được giữ lại nếu thanh toán chưa thành công.
+              {isAuthenticated
+                ? "Giỏ hàng sẽ được giữ lại nếu thanh toán chưa hoàn tất."
+                : "Giỏ hàng của bạn sẽ được giữ nguyên sau khi đăng nhập."}
             </p>
           </div>
         </>

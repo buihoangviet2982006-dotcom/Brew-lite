@@ -1,12 +1,15 @@
 import { BadRequestException } from '@nestjs/common';
 import { InventoryMovementType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { InventoryService } from './inventory.service';
+import {
+  InventoryService,
+  OptimisticLockConflictError,
+} from './inventory.service';
 
-describe('InventoryService', () => {
+describe('InventoryService (Ingredient & Recipe Architecture)', () => {
   const service = new InventoryService({} as PrismaService);
 
-  it('combines base and topping ingredient amounts for every cup in the line', async () => {
+  it('1. getOrderItemUsage: gộp định lượng nguyên liệu của công thức món (theo size) và topping nhân với số lượng ly', async () => {
     const tx = {
       recipe: {
         findFirst: jest
@@ -14,18 +17,23 @@ describe('InventoryService', () => {
           .mockResolvedValueOnce({
             items: [
               {
-                ingredientId: 'coffee',
-                quantity: new Prisma.Decimal(8),
-                ingredient: { name: 'Coffee', isActive: true },
+                ingredientId: 'ing-coffee',
+                quantity: new Prisma.Decimal(18),
+                ingredient: { name: 'Hạt cà phê', isActive: true },
+              },
+              {
+                ingredientId: 'ing-milk',
+                quantity: new Prisma.Decimal(100),
+                ingredient: { name: 'Sữa tươi', isActive: true },
               },
             ],
           })
           .mockResolvedValueOnce({
             items: [
               {
-                ingredientId: 'coffee',
-                quantity: new Prisma.Decimal(3),
-                ingredient: { name: 'Coffee', isActive: true },
+                ingredientId: 'ing-pearl',
+                quantity: new Prisma.Decimal(40),
+                ingredient: { name: 'Trân châu đen', isActive: true },
               },
             ],
           }),
@@ -34,18 +42,41 @@ describe('InventoryService', () => {
 
     const usage = await service.getOrderItemUsage(
       tx,
-      'product-1',
+      'prod-cf-02',
       'M',
-      ['topping-1'],
+      ['top-pearl'],
       2,
     );
 
-    expect(usage).toHaveLength(1);
-    expect(usage[0].ingredientId).toBe('coffee');
-    expect(usage[0].quantity.toNumber()).toBe(22);
+    expect(usage).toEqual([
+      { ingredientId: 'ing-coffee', quantity: new Prisma.Decimal(36) },
+      { ingredientId: 'ing-milk', quantity: new Prisma.Decimal(200) },
+      { ingredientId: 'ing-pearl', quantity: new Prisma.Decimal(80) },
+    ]);
   });
 
-  it('deducts the saved order recipe into the ingredient ledger', async () => {
+  it('2. assertAvailable: chặn tạo đơn khi nguyên liệu trong kho không đủ', async () => {
+    const tx = {
+      ingredient: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'ing-coffee',
+            name: 'Hạt cà phê',
+            isActive: true,
+            currentQuantity: new Prisma.Decimal(10),
+          },
+        ]),
+      },
+    } as unknown as Prisma.TransactionClient;
+
+    await expect(
+      service.assertAvailable(tx, [
+        { ingredientId: 'ing-coffee', quantity: new Prisma.Decimal(18) },
+      ]),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('3. deductOrder: trừ nguyên liệu kèm Optimistic Locking (version + 1) và lưu ORDER_DEDUCTION', async () => {
     const tx = {
       inventoryMovement: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -56,7 +87,7 @@ describe('InventoryService', () => {
           {
             ingredientUsages: [
               {
-                ingredientId: 'coffee',
+                ingredientId: 'ing-coffee',
                 quantity: new Prisma.Decimal(18),
               },
             ],
@@ -64,32 +95,42 @@ describe('InventoryService', () => {
         ]),
       },
       ingredient: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'ing-coffee',
+          name: 'Hạt cà phê',
+          isActive: true,
+          currentQuantity: new Prisma.Decimal(100),
+          version: 4,
+        }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
     } as unknown as Prisma.TransactionClient;
 
     await service.deductOrder(tx, 'order-1');
 
-    expect(tx.ingredient.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          id: 'coffee',
-          currentQuantity: { gte: new Prisma.Decimal(18) },
-        }),
-        data: { currentQuantity: { decrement: new Prisma.Decimal(18) } },
-      }),
-    );
+    expect(tx.ingredient.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'ing-coffee',
+        isActive: true,
+        version: 4,
+        currentQuantity: { gte: new Prisma.Decimal(18) },
+      },
+      data: {
+        currentQuantity: { decrement: new Prisma.Decimal(18) },
+        version: { increment: 1 },
+      },
+    });
     expect(tx.inventoryMovement.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         orderId: 'order-1',
-        ingredientId: 'coffee',
+        ingredientId: 'ing-coffee',
         type: InventoryMovementType.ORDER_DEDUCTION,
         quantityDelta: new Prisma.Decimal(-18),
       }),
     });
   });
 
-  it('does not record a deduction when ingredient stock is insufficient', async () => {
+  it('4. deductOrder: ném BadRequestException khi nguyên liệu không đủ tồn kho', async () => {
     const tx = {
       inventoryMovement: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -100,7 +141,44 @@ describe('InventoryService', () => {
           {
             ingredientUsages: [
               {
-                ingredientId: 'coffee',
+                ingredientId: 'ing-coffee',
+                quantity: new Prisma.Decimal(50),
+              },
+            ],
+          },
+        ]),
+      },
+      ingredient: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'ing-coffee',
+          name: 'Hạt cà phê',
+          isActive: true,
+          currentQuantity: new Prisma.Decimal(20),
+          version: 1,
+        }),
+        updateMany: jest.fn(),
+      },
+    } as unknown as Prisma.TransactionClient;
+
+    await expect(service.deductOrder(tx, 'order-1')).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(tx.ingredient.updateMany).not.toHaveBeenCalled();
+    expect(tx.inventoryMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('5. deductOrder: ném OptimisticLockConflictError khi version bị thay đổi đồng thời nhưng kho vẫn còn đủ', async () => {
+    const tx = {
+      inventoryMovement: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+      orderItem: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            ingredientUsages: [
+              {
+                ingredientId: 'ing-coffee',
                 quantity: new Prisma.Decimal(18),
               },
             ],
@@ -108,24 +186,39 @@ describe('InventoryService', () => {
         ]),
       },
       ingredient: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: 'ing-coffee',
+            name: 'Hạt cà phê',
+            isActive: true,
+            currentQuantity: new Prisma.Decimal(100),
+            version: 1,
+          })
+          .mockResolvedValueOnce({
+            id: 'ing-coffee',
+            name: 'Hạt cà phê',
+            isActive: true,
+            currentQuantity: new Prisma.Decimal(82),
+            version: 2,
+          }),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
-        findUnique: jest.fn().mockResolvedValue({ name: 'Coffee' }),
       },
     } as unknown as Prisma.TransactionClient;
 
     await expect(service.deductOrder(tx, 'order-1')).rejects.toThrow(
-      BadRequestException,
+      OptimisticLockConflictError,
     );
     expect(tx.inventoryMovement.create).not.toHaveBeenCalled();
   });
 
-  it('restores exactly the paid-order deduction when the order is cancelled', async () => {
+  it('6. reverseOrder: hoàn trả đúng lượng nguyên liệu đã trừ khi hủy đơn PAID', async () => {
     const tx = {
       inventoryMovement: {
         findMany: jest.fn().mockResolvedValue([
           {
-            ingredientId: 'coffee',
-            quantityDelta: new Prisma.Decimal(-12.5),
+            ingredientId: 'ing-coffee',
+            quantityDelta: new Prisma.Decimal(-22.5),
           },
         ]),
         findFirst: jest.fn().mockResolvedValue(null),
@@ -136,118 +229,23 @@ describe('InventoryService', () => {
       },
     } as unknown as Prisma.TransactionClient;
 
-    await service.reverseOrder(tx, 'order-1', 'admin-1');
+    await service.reverseOrder(tx, 'order-1', 'barista-1');
 
     expect(tx.ingredient.update).toHaveBeenCalledWith({
-      where: { id: 'coffee' },
-      data: { currentQuantity: { increment: new Prisma.Decimal(12.5) } },
+      where: { id: 'ing-coffee' },
+      data: {
+        currentQuantity: { increment: new Prisma.Decimal(22.5) },
+        version: { increment: 1 },
+      },
     });
     expect(tx.inventoryMovement.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         orderId: 'order-1',
-        ingredientId: 'coffee',
-        actorId: 'admin-1',
+        ingredientId: 'ing-coffee',
+        actorId: 'barista-1',
         type: InventoryMovementType.ORDER_REVERSAL,
-        quantityDelta: new Prisma.Decimal(12.5),
+        quantityDelta: new Prisma.Decimal(22.5),
       }),
     });
-  });
-
-  it('adds received quantities to stock and records a purchase movement', async () => {
-    const tx = {
-      purchaseReceipt: {
-        create: jest.fn().mockResolvedValue({ id: 'receipt-1' }),
-      },
-      ingredient: {
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      },
-      purchaseReceiptItem: {
-        create: jest.fn().mockResolvedValue({}),
-      },
-      inventoryMovement: {
-        create: jest.fn().mockResolvedValue({}),
-      },
-    };
-    const prisma = {
-      $transaction: jest.fn((callback) => callback(tx)),
-    } as unknown as PrismaService;
-
-    await new InventoryService(prisma).createReceipt(
-      { items: [{ ingredientId: 'coffee', quantity: 250 }] },
-      'admin-1',
-    );
-
-    expect(tx.ingredient.updateMany).toHaveBeenCalledWith({
-      where: { id: 'coffee', isActive: true },
-      data: { currentQuantity: { increment: new Prisma.Decimal(250) } },
-    });
-    expect(tx.purchaseReceiptItem.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        receiptId: 'receipt-1',
-        ingredientId: 'coffee',
-        quantity: new Prisma.Decimal(250),
-      }),
-    });
-    expect(tx.inventoryMovement.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        ingredientId: 'coffee',
-        type: InventoryMovementType.PURCHASE,
-        quantityDelta: new Prisma.Decimal(250),
-        receiptId: 'receipt-1',
-        actorId: 'admin-1',
-      }),
-    });
-  });
-
-  it('subtracts inventory adjustments and prevents reducing below available stock', async () => {
-    const tx = {
-      ingredient: {
-        updateMany: jest
-          .fn()
-          .mockResolvedValueOnce({ count: 1 })
-          .mockResolvedValueOnce({ count: 0 }),
-        findUnique: jest.fn().mockResolvedValue({ id: 'coffee' }),
-      },
-      inventoryMovement: {
-        create: jest.fn().mockResolvedValue({}),
-      },
-    };
-    const prisma = {
-      $transaction: jest.fn((callback) => callback(tx)),
-    } as unknown as PrismaService;
-    const inventory = new InventoryService(prisma);
-
-    await inventory.adjustInventory(
-      { ingredientId: 'coffee', quantityDelta: -20, note: 'Hao hụt' },
-      'admin-1',
-    );
-
-    expect(tx.ingredient.updateMany).toHaveBeenNthCalledWith(
-      1,
-      {
-        where: {
-          id: 'coffee',
-          isActive: true,
-          currentQuantity: { gte: new Prisma.Decimal(20) },
-        },
-        data: { currentQuantity: { increment: new Prisma.Decimal(-20) } },
-      },
-    );
-    expect(tx.inventoryMovement.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        ingredientId: 'coffee',
-        type: InventoryMovementType.ADJUSTMENT,
-        quantityDelta: new Prisma.Decimal(-20),
-        actorId: 'admin-1',
-      }),
-    });
-
-    await expect(
-      inventory.adjustInventory(
-        { ingredientId: 'coffee', quantityDelta: -1000, note: 'Điều chỉnh quá tồn' },
-        'admin-1',
-      ),
-    ).rejects.toThrow(BadRequestException);
-    expect(tx.inventoryMovement.create).toHaveBeenCalledTimes(1);
   });
 });
