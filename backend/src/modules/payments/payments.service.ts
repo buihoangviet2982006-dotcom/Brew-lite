@@ -72,6 +72,43 @@ export class PaymentsService {
   }
 
   /**
+   * Truy vấn danh sách giao dịch gần nhất từ SePay (Tự động hỗ trợ cả Sandbox v2 và Live)
+   */
+  private async fetchSepayTransactions(apiKey: string): Promise<any[]> {
+    const candidateUrls = [
+      'https://userapi-sandbox.sepay.vn/v2/transactions?limit=20',
+      'https://my.sepay.vn/userapi/transactions/list?limit=20',
+      'https://userapi.sepay.vn/v2/transactions?limit=20',
+    ];
+
+    for (const url of candidateUrls) {
+      try {
+        const response = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const list = Array.isArray(data.data)
+            ? data.data
+            : Array.isArray(data.transactions)
+            ? data.transactions
+            : Array.isArray(data.messages)
+            ? data.messages
+            : [];
+          return list;
+        }
+      } catch (err) {
+        console.warn(`Lỗi khi gọi SePay endpoint ${url}:`, err);
+      }
+    }
+    return [];
+  }
+
+  /**
    * Tự động kiểm tra trạng thái thanh toán của đơn hàng (Polling realtime).
    */
   async checkPaymentStatus(orderId: string, userId: string) {
@@ -100,47 +137,34 @@ export class PaymentsService {
     const sepayApiKey = process.env.SEPAY_API_KEY?.trim();
     if (sepayApiKey && order.status === OrderStatus.PENDING) {
       try {
-        const response = await fetch(
-          'https://my.sepay.vn/userapi/transactions/list?limit=20',
-          {
-            headers: {
-              Authorization: `Bearer ${sepayApiKey}`,
-              'Content-Type': 'application/json',
-            },
-          },
-        );
+        const transactions = await this.fetchSepayTransactions(sepayApiKey);
 
-        if (response.ok) {
-          const data = await response.json();
-          const transactions: any[] = data.transactions || data.messages || [];
+        const expectedContentCode = `BL${order.id.slice(0, 8).toUpperCase()}`;
+        const orderTotal = Number(order.total);
 
-          const expectedContentCode = `BL${order.id.slice(0, 8).toUpperCase()}`;
-          const orderTotal = Number(order.total);
+        const matchedTx = transactions.find((tx) => {
+          const content = (
+            tx.transaction_content ||
+            tx.content ||
+            ''
+          ).toUpperCase();
+          const amountIn = Number(tx.amount_in || tx.transferAmount || 0);
+          return content.includes(expectedContentCode) && amountIn >= orderTotal;
+        });
 
-          const matchedTx = transactions.find((tx) => {
-            const content = (
-              tx.transaction_content ||
-              tx.content ||
-              ''
-            ).toUpperCase();
-            const amountIn = Number(tx.amount_in || tx.transferAmount || 0);
-            return content.includes(expectedContentCode) && amountIn >= orderTotal;
-          });
+        if (matchedTx) {
+          const refCode =
+            matchedTx.reference_number ||
+            matchedTx.referenceCode ||
+            matchedTx.id?.toString() ||
+            `SEPAY_${Date.now()}`;
 
-          if (matchedTx) {
-            const refCode =
-              matchedTx.reference_number ||
-              matchedTx.referenceCode ||
-              matchedTx.id?.toString() ||
-              `SEPAY_${Date.now()}`;
-
-            return await this.completePaymentSuccess(
-              order,
-              refCode,
-              PaymentMethod.WALLET,
-              'SEPAY_AUTO',
-            );
-          }
+          return await this.completePaymentSuccess(
+            order,
+            refCode,
+            PaymentMethod.WALLET,
+            'SEPAY_AUTO',
+          );
         }
       } catch (err) {
         console.error('Lỗi khi truy vấn SePay API:', err);

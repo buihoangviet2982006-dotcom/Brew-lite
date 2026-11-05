@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  AlertTriangle,
   ArrowLeft,
   Check,
   CheckCircle2,
@@ -105,7 +104,6 @@ export default function CheckoutPage() {
   const [pendingOrder, setPendingOrder] = useState<PendingOrder | null>(null);
   const [pickupType, setPickupType] = useState<PickupType>("DINE_IN");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>("WALLET");
-  const [simulateFailure, setSimulateFailure] = useState(false);
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [note, setNote] = useState("");
@@ -275,7 +273,6 @@ export default function CheckoutPage() {
           orderId: order.id,
           amount: order.total,
           method: paymentMethod,
-          simulateFailure: simulateFailure || undefined,
         }),
       });
 
@@ -315,7 +312,7 @@ export default function CheckoutPage() {
     }
   };
 
-  // Tải mã VietQR tùy chọn cho đơn hàng
+  // Tải mã VietQR cho đơn hàng
   const loadVietQR = async () => {
     if (items.length === 0 || !user) return;
     setIsLoadingQr(true);
@@ -330,6 +327,26 @@ export default function CheckoutPage() {
       setIsLoadingQr(false);
     }
   };
+
+  useEffect(() => {
+    if (
+      isMounted &&
+      isAuthenticated &&
+      paymentMethod === "WALLET" &&
+      !vietQrData &&
+      !isLoadingQr &&
+      items.length > 0 &&
+      !paidOrder
+    ) {
+      loadVietQR();
+    }
+  }, [isMounted, isAuthenticated, paymentMethod, vietQrData, isLoadingQr, items.length, paidOrder]);
+
+  useEffect(() => {
+    if (vietQrData && usablePendingOrder && vietQrData.orderId !== usablePendingOrder.id) {
+      setVietQrData(null);
+    }
+  }, [usablePendingOrder, vietQrData]);
 
   const handleCopyContent = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -779,22 +796,6 @@ export default function CheckoutPage() {
               )}
             </div>
           )}
-
-          {/* Tùy chọn mô phỏng lỗi thanh toán (phục vụ demo US-05 PAYMENT_FAILED) */}
-          <div className="pt-2 border-t border-brew-100 flex items-center justify-between text-xs">
-            <label className="flex items-center gap-2 cursor-pointer text-zinc-600">
-              <input
-                type="checkbox"
-                checked={simulateFailure}
-                onChange={(e) => setSimulateFailure(e.target.checked)}
-                className="h-4 w-4 rounded text-amber-600"
-              />
-              <span className="flex items-center gap-1">
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
-                Mô phỏng lỗi thanh toán (test trạng thái PAYMENT_FAILED)
-              </span>
-            </label>
-          </div>
         </section>
 
         {/* 6. Chi tiết thanh toán & Xác nhận */}
@@ -834,27 +835,50 @@ export default function CheckoutPage() {
             </p>
           )}
 
-          <button
-            type="button"
-            onClick={handleConfirmPayment}
-            disabled={isSubmitting}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brew-600 px-5 py-3.5 text-sm font-black text-white shadow-md transition hover:bg-brew-700 disabled:opacity-50 active:scale-[0.99]"
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Đang xử lý thanh toán...</span>
-              </>
-            ) : (
-              <span>
-                Xác nhận trả ({formatPrice(usablePendingOrder?.total ?? estimatedTotal)})
-              </span>
-            )}
-          </button>
+          {paymentMethod === "WALLET" ? (
+            <button
+              type="button"
+              onClick={() => checkStatusNow(vietQrData?.orderId)}
+              disabled={isCheckingStatus || !vietQrData}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3.5 text-sm font-black text-white shadow-md transition hover:bg-emerald-700 disabled:opacity-50 active:scale-[0.99]"
+            >
+              {isCheckingStatus ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Đang kiểm tra giao dịch...</span>
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4" />
+                  <span>Tôi đã chuyển khoản (Kiểm tra ngay)</span>
+                </>
+              )}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleConfirmPayment}
+              disabled={isSubmitting}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brew-600 px-5 py-3.5 text-sm font-black text-white shadow-md transition hover:bg-brew-700 disabled:opacity-50 active:scale-[0.99]"
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Đang xử lý thẻ ngân hàng...</span>
+                </>
+              ) : (
+                <span>
+                  Thanh toán qua Thẻ ({formatPrice(usablePendingOrder?.total ?? estimatedTotal)})
+                </span>
+              )}
+            </button>
+          )}
 
           <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs text-brew-500">
             <LockKeyhole className="h-3.5 w-3.5" />
-            Thanh toán không tiền mặt an toàn (Idempotent Payment)
+            {paymentMethod === "WALLET"
+              ? "Tự động xác nhận sau 1-3 giây khi SePay nhận tiền"
+              : "Thanh toán không tiền mặt an toàn (Idempotent Payment)"}
           </p>
         </section>
       </div>
