@@ -24,7 +24,6 @@ export class ProductResponseDto {
   name: string;
   price: number;
   imageUrl: string;
-  stock: number;
   description?: string;
   category: ProductCategory;
   sizes: ProductSizeItem[];

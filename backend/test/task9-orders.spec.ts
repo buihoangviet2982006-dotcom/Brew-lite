@@ -4,6 +4,7 @@ import { OrdersController } from '../src/modules/orders/orders_controller';
 import { OrdersService } from '../src/modules/orders/orders_service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { Prisma } from '@prisma/client';
+import { InventoryService } from '../src/modules/inventory/inventory.service';
 
 describe('Task 9: Order Confirmation & History (OrdersController & OrdersService)', () => {
   let controller: OrdersController;
@@ -22,6 +23,7 @@ describe('Task 9: Order Confirmation & History (OrdersController & OrdersService
       controllers: [OrdersController],
       providers: [
         OrdersService,
+        { provide: InventoryService, useValue: {} },
         {
           provide: PrismaService,
           useValue: mockPrismaService,

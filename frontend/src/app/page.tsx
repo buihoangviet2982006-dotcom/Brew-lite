@@ -65,8 +65,8 @@ export default function MenuPage() {
 
       <div className="flex items-center justify-between mb-5">
         <div>
-          <h2 className="text-xl font-black text-brew-950 tracking-tight">Danh sách thức uống</h2>
-          <p className="text-xs text-brew-600 mt-0.5">Chạm vào món để chọn Size và Topping</p>
+          <h2 className="text-xl font-black text-brew-950 tracking-tight">Thực đơn Cà Phê BrewLite</h2>
+          <p className="text-xs text-brew-600 mt-0.5">Cà phê rang mộc nguyên chất · Chạm để chọn Size và Topping</p>
         </div>
       </div>
       

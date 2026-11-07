@@ -64,7 +64,7 @@ Dự án được xây dựng theo mô hình **Monorepo**, áp dụng quy trình
 | :--- | :--- | :--- |
 | **Frontend** | **Next.js 14**, React, TypeScript, TailwindCSS, Zustand | Quản lý state giỏ hàng, SSR/CSR, Responsive |
 | **Backend** | **NestJS**, TypeScript, REST API, Class-Validator, JWT | Kiến trúc module hóa, bảo mật JWT Guard |
-| **Cơ sở dữ liệu** | **PostgreSQL 16**, Prisma ORM | Quản lý quan hệ bảng, migrations dữ liệu |
+| **Cơ sở dữ liệu** | **PostgreSQL 16**, Prisma ORM | Quản lý schema bằng Prisma |
 | **Thanh toán** | Mock Payment Service | Mô phỏng xử lý Idempotent, tránh charge trùng |
 | **DevOps** | Docker Compose, Git branching, Multi-stage build | Môi trường đồng nhất dev và bàn giao |
 
@@ -76,7 +76,7 @@ Dự án được xây dựng theo mô hình **Monorepo**, áp dụng quy trình
 Brew-lite/
 ├── .github/                     # GitHub workflows / CI/CD (nếu có)
 ├── backend/                     # Backend Source Code (NestJS)
-│   ├── prisma/                  # Prisma schema và migrations
+│   ├── prisma/                  # Prisma schema và seed dữ liệu
 │   │   └── schema.prisma        # Mô hình CSDL (User, Product, Order, Payment)
 │   ├── src/
 │   │   ├── common/              # Guards, Interceptors, Filters, State Machine
@@ -84,7 +84,8 @@ Brew-lite/
 │   │   │   ├── auth/            # Module xác thực JWT, bcrypt (Task 7)
 │   │   │   ├── products/        # Module sản phẩm & menu (Task 2)
 │   │   │   ├── orders/          # Module đơn hàng (Task 6, 10)
-│   │   │   └── payments/        # Module thanh toán Mock Idempotent (Task 8)
+│   │   │   ├── payments/        # Module thanh toán Mock Idempotent (Task 8)
+│   │   │   └── inventory/       # Kho nguyên liệu & định lượng công thức (Task 10.3)
 │   │   ├── app.controller.ts    # Controller gốc (Hello/Health endpoint)
 │   │   ├── app.module.ts        # Root Module
 │   │   ├── app.service.ts       # Service gốc
@@ -212,6 +213,7 @@ docker compose up -d --build
 docker compose exec backend npx prisma db push
 docker compose exec backend npx prisma db seed
 ```
+Seed mẫu tự động khởi tạo danh sách người dùng mẫu (`customer@brewlite.vn`, `barista@brewlite.vn`), menu sản phẩm, topping, mã giảm giá (`BREWLITE10`, `BANMOI`), danh mục nguyên liệu (`Ingredient`) kèm số lượng tồn kho ban đầu và định lượng công thức (`Recipe`) cho từng món/size/topping.
 * **Frontend:** [http://localhost:3000](http://localhost:3000)
 * **Backend API:** [http://localhost:4000/api](http://localhost:4000/api)
 * **Backend Health Check:** [http://localhost:4000/api/health](http://localhost:4000/api/health)
