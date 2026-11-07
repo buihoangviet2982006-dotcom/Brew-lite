@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -8,6 +9,10 @@ import { Prisma, OrderStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateOrderDto } from './dto/create_order_dto';
 import { assertTransition } from '../../common/orders/order-state-machine';
+import {
+  InventoryService,
+  OptimisticLockConflictError,
+} from '../inventory/inventory.service';
 
 const POINT_VALUE_VND = 10;
 const ORDER_NUMBER_ATTEMPTS = 5;
@@ -17,7 +22,10 @@ class PaymentWriteConflictError extends Error {}
 
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly inventory: InventoryService,
+  ) {}
 
   /** Tạo mã nhận diện hiển thị cho quầy; DB sẽ đảm bảo mã không bị trùng. */
   private generateOrderNumber(): string {
@@ -127,37 +135,6 @@ export class OrdersService {
           });
           const productsById = new Map(products.map((product) => [product.id, product]));
 
-          // Cộng số lượng trùng product/topping để kiểm tra tổng nhu cầu của cả giỏ.
-          const requestedProductQuantities = new Map<string, number>();
-          const requestedToppingQuantities = new Map<string, number>();
-          for (const item of dto.items) {
-            const productQuantity =
-              (requestedProductQuantities.get(item.productId) ?? 0) + item.qty;
-            if (!Number.isSafeInteger(productQuantity)) {
-              throw new BadRequestException(
-                'Tổng số lượng sản phẩm trong giỏ hàng không hợp lệ.',
-              );
-            }
-            requestedProductQuantities.set(
-              item.productId,
-              productQuantity,
-            );
-            for (const selection of item.toppings ?? []) {
-              const toppingQuantity =
-                (requestedToppingQuantities.get(selection.toppingId) ?? 0) +
-                item.qty;
-              if (!Number.isSafeInteger(toppingQuantity)) {
-                throw new BadRequestException(
-                  'Tổng số lượng topping trong giỏ hàng không hợp lệ.',
-                );
-              }
-              requestedToppingQuantities.set(
-                selection.toppingId,
-                toppingQuantity,
-              );
-            }
-          }
-
           const allToppingIds = [
             ...new Set(
               dto.items.flatMap(
@@ -175,62 +152,76 @@ export class OrdersService {
           const toppingsById = new Map(toppings.map((topping) => [topping.id, topping]));
 
           // 5. Xác minh sản phẩm, size, topping và tính giá từng dòng từ database.
-          let subtotal = new Prisma.Decimal(0);
-          const preparedItems = dto.items.map((item) => {
-            const product = productsById.get(item.productId);
-            if (!product) {
-              throw new NotFoundException(
-                `Không tìm thấy sản phẩm '${item.productId}'.`,
-              );
-            }
-            if (
-              !product.isAvailable ||
-              product.stock < (requestedProductQuantities.get(product.id) ?? 0)
-            ) {
-              throw new BadRequestException(
-                `Sản phẩm '${product.name}' hiện không đủ số lượng hoặc đã ngừng bán.`,
-              );
-            }
+          const prepared = await Promise.all(
+            dto.items.map(async (item) => {
+              const product = productsById.get(item.productId);
+              if (!product) {
+                throw new NotFoundException(
+                  `Không tìm thấy sản phẩm '${item.productId}'.`,
+                );
+              }
+              if (!product.isAvailable) {
+                throw new BadRequestException(
+                  `Sản phẩm '${product.name}' hiện đã ngừng bán.`,
+                );
+              }
 
-            const basePrice = this.getProductPrice(product, item.size);
-            const toppingSnapshots = (item.toppings ?? []).map((selection) => {
-              const topping = toppingsById.get(selection.toppingId);
-              if (!topping) {
-                throw new BadRequestException(
-                  `Topping '${selection.toppingId}' không tồn tại hoặc đã ngừng bán.`,
-                );
-              }
-              if (
-                topping.stock < (requestedToppingQuantities.get(topping.id) ?? 0)
-              ) {
-                throw new BadRequestException(
-                  `Topping '${topping.name}' hiện không đủ số lượng.`,
-                );
-              }
+              const basePrice = this.getProductPrice(product, item.size);
+              const toppingSnapshots = (item.toppings ?? []).map((selection) => {
+                const topping = toppingsById.get(selection.toppingId);
+                if (!topping) {
+                  throw new BadRequestException(
+                    `Topping '${selection.toppingId}' không tồn tại hoặc đã ngừng bán.`,
+                  );
+                }
+
+                return {
+                  toppingId: topping.id,
+                  name: topping.name,
+                  price: Number(topping.price),
+                };
+              });
+
+              const toppingTotal = toppingSnapshots.reduce(
+                (total, topping) => total.plus(topping.price),
+                new Prisma.Decimal(0),
+              );
+              const lineTotal = basePrice.plus(toppingTotal).mul(item.qty);
+              const ingredientUsages = await this.inventory.getOrderItemUsage(
+                tx,
+                product.id,
+                item.size,
+                toppingSnapshots.map((topping) => topping.toppingId),
+                item.qty,
+              );
 
               return {
-                toppingId: topping.id,
-                name: topping.name,
-                price: Number(topping.price),
+                item: {
+                  productId: product.id,
+                  size: item.size,
+                  basePrice,
+                  qty: item.qty,
+                  lineTotal,
+                  toppings: toppingSnapshots,
+                  ingredientUsages: {
+                    create: ingredientUsages,
+                  },
+                },
+                lineTotal,
+                ingredientUsages,
               };
-            });
+            }),
+          );
 
-            const toppingTotal = toppingSnapshots.reduce(
-              (total, topping) => total.plus(topping.price),
-              new Prisma.Decimal(0),
-            );
-            const lineTotal = basePrice.plus(toppingTotal).mul(item.qty);
-            subtotal = subtotal.plus(lineTotal);
-
-            return {
-              productId: product.id,
-              size: item.size,
-              basePrice,
-              qty: item.qty,
-              lineTotal,
-              toppings: toppingSnapshots,
-            };
-          });
+          await this.inventory.assertAvailable(
+            tx,
+            prepared.flatMap((item) => item.ingredientUsages),
+          );
+          const preparedItems = prepared.map((item) => item.item);
+          const subtotal = prepared.reduce(
+            (total, item) => total.plus(item.lineTotal),
+            new Prisma.Decimal(0),
+          );
 
           // 6. Nếu có voucher thì kiểm tra điều kiện và tính mức giảm dự kiến.
           // Chưa tăng usedCount vì đơn vẫn đang PENDING, chưa thanh toán.
@@ -348,7 +339,6 @@ export class OrdersService {
           },
         };
       } catch (error) {
-        // Các lỗi khác (validation, database, thiếu dữ liệu) phải trả về caller.
         if (
           this.isOrderNumberCollision(error) &&
           attempt < ORDER_NUMBER_ATTEMPTS - 1
@@ -364,7 +354,7 @@ export class OrdersService {
 
   /**
    * Được bộ phận thanh toán gọi sau khi giao dịch thành công.
-   * Tồn kho, lượt dùng mã giảm giá, điểm thành viên và trạng thái đơn được cập nhật cùng lúc.
+   * Tồn kho nguyên liệu, lượt dùng mã giảm giá, điểm thành viên và trạng thái đơn được cập nhật cùng lúc.
    */
   async markAsPaid(orderId: string) {
     for (let attempt = 0; attempt < PAYMENT_ATTEMPTS; attempt += 1) {
@@ -390,133 +380,9 @@ export class OrdersService {
             };
           }
 
-          if (order.status !== 'PENDING' && order.status !== 'PAYMENT_FAILED') {
-            throw new BadRequestException(
-              'Đơn hàng không ở trạng thái có thể thanh toán.',
-            );
-          }
+          assertTransition(order.status, OrderStatus.PAID);
 
-          const productQuantities = new Map<string, number>();
-          const toppingQuantities = new Map<string, number>();
-          for (const item of order.items) {
-            const productQuantity =
-              (productQuantities.get(item.productId) ?? 0) + item.qty;
-            if (!Number.isSafeInteger(productQuantity)) {
-              throw new BadRequestException(
-                'Tổng số lượng sản phẩm trong đơn hàng không hợp lệ.',
-              );
-            }
-            productQuantities.set(item.productId, productQuantity);
-
-            if (item.toppings === null) {
-              continue;
-            }
-            if (!Array.isArray(item.toppings)) {
-              throw new BadRequestException(
-                'Dữ liệu topping của đơn hàng không hợp lệ.',
-              );
-            }
-
-            for (const selection of item.toppings) {
-              if (
-                typeof selection !== 'object' ||
-                selection === null ||
-                Array.isArray(selection) ||
-                typeof selection.toppingId !== 'string'
-              ) {
-                throw new BadRequestException(
-                  'Dữ liệu topping của đơn hàng không hợp lệ.',
-                );
-              }
-
-              const toppingQuantity =
-                (toppingQuantities.get(selection.toppingId) ?? 0) + item.qty;
-              if (!Number.isSafeInteger(toppingQuantity)) {
-                throw new BadRequestException(
-                  'Tổng số lượng topping trong đơn hàng không hợp lệ.',
-                );
-              }
-              toppingQuantities.set(selection.toppingId, toppingQuantity);
-            }
-          }
-
-          const products = await tx.product.findMany({
-            where: { id: { in: [...productQuantities.keys()] } },
-          });
-          if (products.length !== productQuantities.size) {
-            throw new BadRequestException(
-              'Một hoặc nhiều sản phẩm trong đơn hàng không còn tồn tại.',
-            );
-          }
-
-          const toppings = toppingQuantities.size
-            ? await tx.topping.findMany({
-                where: { id: { in: [...toppingQuantities.keys()] } },
-              })
-            : [];
-          if (toppings.length !== toppingQuantities.size) {
-            throw new BadRequestException(
-              'Một hoặc nhiều topping trong đơn hàng không còn tồn tại.',
-            );
-          }
-
-          for (const product of products.sort((a, b) =>
-            a.id.localeCompare(b.id),
-          )) {
-            const quantity = productQuantities.get(product.id);
-            if (quantity === undefined) {
-              throw new Error('Không tìm thấy số lượng sản phẩm trong đơn hàng.');
-            }
-            if (product.stock < quantity) {
-              throw new BadRequestException(
-                `Sản phẩm '${product.name}' không đủ tồn kho để thanh toán.`,
-              );
-            }
-
-            const update = await tx.product.updateMany({
-              where: {
-                id: product.id,
-                version: product.version,
-                stock: { gte: quantity },
-              },
-              data: {
-                stock: { decrement: quantity },
-                version: { increment: 1 },
-              },
-            });
-            if (update.count !== 1) {
-              throw new PaymentWriteConflictError();
-            }
-          }
-
-          for (const topping of toppings.sort((a, b) =>
-            a.id.localeCompare(b.id),
-          )) {
-            const quantity = toppingQuantities.get(topping.id);
-            if (quantity === undefined) {
-              throw new Error('Không tìm thấy số lượng topping trong đơn hàng.');
-            }
-            if (topping.stock < quantity) {
-              throw new BadRequestException(
-                `Topping '${topping.name}' không đủ tồn kho để thanh toán.`,
-              );
-            }
-
-            const update = await tx.topping.updateMany({
-              where: {
-                id: topping.id,
-                version: topping.version,
-                stock: { gte: quantity },
-              },
-              data: {
-                stock: { decrement: quantity },
-                version: { increment: 1 },
-              },
-            });
-            if (update.count !== 1) {
-              throw new PaymentWriteConflictError();
-            }
-          }
+          await this.inventory.deductOrder(tx, order.id);
 
           if (order.voucherId) {
             const voucher = await tx.voucher.findUnique({
@@ -597,9 +463,19 @@ export class OrdersService {
           };
         });
       } catch (error) {
-        if (!(error instanceof PaymentWriteConflictError)) {
-          throw error;
+        if (
+          error instanceof PaymentWriteConflictError ||
+          error instanceof OptimisticLockConflictError
+        ) {
+          if (attempt < PAYMENT_ATTEMPTS - 1) {
+            await new Promise((res) => setTimeout(res, 20 + Math.random() * 40));
+            continue;
+          }
+          throw new ConflictException(
+            'Dữ liệu vừa được cập nhật bởi một giao dịch khác. Vui lòng thử lại.',
+          );
         }
+        throw error;
       }
     }
 
@@ -711,33 +587,60 @@ export class OrdersService {
   async updateStatus(
     orderId: string,
     nextStatus: OrderStatus,
-    user?: { id: string; role?: string },
+    user: { id: string; role?: string },
   ) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-    });
-
-    if (!order) {
-      throw new NotFoundException('Không tìm thấy đơn hàng.');
+    if (user.role !== 'BARISTA') {
+      throw new ForbiddenException(
+        'Chỉ nhân viên pha chế (Barista) mới được cập nhật trạng thái đơn hàng.',
+      );
     }
 
-    // Kiểm tra tính hợp lệ bằng State Machine
-    assertTransition(order.status, nextStatus);
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findUnique({ where: { id: orderId } });
+      if (!order) {
+        throw new NotFoundException('Không tìm thấy đơn hàng.');
+      }
 
-    const updated = await this.prisma.order.update({
-      where: { id: orderId },
-      data: { status: nextStatus },
+      assertTransition(order.status, nextStatus);
+      if (order.status === 'PAID' && nextStatus === 'CANCELLED') {
+        await this.inventory.reverseOrder(tx, order.id, user.id);
+
+        if (order.voucherId) {
+          await tx.voucher.updateMany({
+            where: { id: order.voucherId, usedCount: { gt: 0 } },
+            data: { usedCount: { decrement: 1 } },
+          });
+        }
+
+        const pointsDelta = order.pointsUsed - order.pointsEarned;
+        if (pointsDelta !== 0) {
+          await tx.user.update({
+            where: { id: order.userId },
+            data: { loyaltyPoints: { increment: pointsDelta } },
+          });
+        }
+      }
+
+      const update = await tx.order.updateMany({
+        where: { id: orderId, status: order.status },
+        data: { status: nextStatus },
+      });
+      if (update.count !== 1) {
+        throw new ConflictException(
+          'Đơn hàng vừa được cập nhật bởi một giao dịch khác. Vui lòng thử lại.',
+        );
+      }
+
+      return {
+        success: true,
+        message: `Cập nhật trạng thái đơn hàng sang ${nextStatus} thành công.`,
+        data: {
+          id: order.id,
+          orderNumber: order.orderNumber,
+          previousStatus: order.status,
+          status: nextStatus,
+        },
+      };
     });
-
-    return {
-      success: true,
-      message: `Cập nhật trạng thái đơn hàng sang ${nextStatus} thành công.`,
-      data: {
-        id: updated.id,
-        orderNumber: updated.orderNumber,
-        previousStatus: order.status,
-        status: updated.status,
-      },
-    };
   }
 }

@@ -13,9 +13,9 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/src/main",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
+    "prisma:push": "prisma db push",
     "prisma:seed": "ts-node prisma/seed.ts",
-    "test": "jest --rootDir .",
+    "test": "jest --rootDir . --runInBand",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:e2e": "jest --config ./test/jest-e2e.json"

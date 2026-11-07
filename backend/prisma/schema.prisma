@@ -30,6 +30,11 @@ enum PaymentStatus {
   FAILED
 }
 
+enum InventoryMovementType {
+  ORDER_DEDUCTION
+  ORDER_REVERSAL
+}
+
 enum DiscountType {
   PERCENT
   FIXED
@@ -38,19 +43,19 @@ enum DiscountType {
 enum UserRole {
   CUSTOMER
   BARISTA
-  ADMIN
 }
 
 model User {
-  id            String    @id @default(uuid())
-  email         String    @unique
-  passwordHash  String
-  fullName      String?
-  role          UserRole  @default(CUSTOMER)
-  loyaltyPoints Int       @default(0)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  orders        Order[]
+  id                 String              @id @default(uuid())
+  email              String              @unique
+  passwordHash       String
+  fullName           String?
+  role               UserRole            @default(CUSTOMER)
+  loyaltyPoints      Int                 @default(0)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  orders             Order[]
+  inventoryMovements InventoryMovement[]
 
   @@map("users")
 }
@@ -61,14 +66,13 @@ model Product {
   description String?
   price       Decimal     @db.Decimal(10, 2)
   imageUrl    String
-  stock       Int         @default(100)
-  version     Int         @default(0) // Optimistic Locking (Task 10.3)
   category    String      @default("coffee")
-  sizes       Json?       // [{"size": "S", "price": 35000}, {"size": "M", "price": 42000}, {"size": "L", "price": 48000}]
+  sizes       Json? // [{"size": "S", "price": 35000}, {"size": "M", "price": 42000}, {"size": "L", "price": 48000}]
   isAvailable Boolean     @default(true)
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
   orderItems  OrderItem[]
+  recipes     Recipe[]
 
   @@map("products")
 }
@@ -77,11 +81,10 @@ model Topping {
   id        String   @id @default(uuid())
   name      String   @unique
   price     Decimal  @db.Decimal(10, 2)
-  stock     Int      @default(100)
-  version   Int      @default(0)
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  recipes   Recipe[]
 
   @@map("toppings")
 }
@@ -105,39 +108,41 @@ model Voucher {
 }
 
 model Order {
-  id             String       @id @default(uuid())
-  orderNumber    String?      @unique // e.g. "#1042" cho quầy nhận nước
-  userId         String
-  user           User         @relation(fields: [userId], references: [id])
-  status         OrderStatus  @default(PENDING)
-  subtotal       Decimal      @db.Decimal(10, 2)
-  discountAmount Decimal      @default(0) @db.Decimal(10, 2)
-  total          Decimal      @db.Decimal(10, 2)
-  voucherId      String?
-  voucher        Voucher?     @relation(fields: [voucherId], references: [id])
-  voucherCode    String?
-  pointsUsed     Int          @default(0)
-  pointsEarned   Int          @default(0) // Cộng sau khi đơn PAID (Task 10.4)
-  note           String?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  items          OrderItem[]
-  payments       Payment[]
+  id                 String              @id @default(uuid())
+  orderNumber        String?             @unique // e.g. "#1042" cho quầy nhận nước
+  userId             String
+  user               User                @relation(fields: [userId], references: [id])
+  status             OrderStatus         @default(PENDING)
+  subtotal           Decimal             @db.Decimal(10, 2)
+  discountAmount     Decimal             @default(0) @db.Decimal(10, 2)
+  total              Decimal             @db.Decimal(10, 2)
+  voucherId          String?
+  voucher            Voucher?            @relation(fields: [voucherId], references: [id])
+  voucherCode        String?
+  pointsUsed         Int                 @default(0)
+  pointsEarned       Int                 @default(0) // Cộng sau khi đơn PAID (Task 10.4)
+  note               String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  items              OrderItem[]
+  payments           Payment[]
+  inventoryMovements InventoryMovement[]
 
   @@map("orders")
 }
 
 model OrderItem {
-  id        String   @id @default(uuid())
-  orderId   String
-  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  productId String
-  product   Product  @relation(fields: [productId], references: [id])
-  size      String   // S, M, L hoặc STANDARD
-  basePrice Decimal  @db.Decimal(10, 2)
-  qty       Int      @default(1)
-  lineTotal Decimal  @db.Decimal(10, 2)
-  toppings  Json?    // Snapshot: [{"id": "top-1", "name": "Trân châu", "price": 5000}]
+  id               String                 @id @default(uuid())
+  orderId          String
+  order            Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product                @relation(fields: [productId], references: [id])
+  size             String // S, M, L hoặc STANDARD
+  basePrice        Decimal                @db.Decimal(10, 2)
+  qty              Int                    @default(1)
+  lineTotal        Decimal                @db.Decimal(10, 2)
+  toppings         Json? // Snapshot: [{"toppingId": "top-1", "name": "Trân châu", "price": 5000}]
+  ingredientUsages OrderIngredientUsage[]
 
   @@map("order_items")
 }
@@ -154,4 +159,79 @@ model Payment {
   createdAt      DateTime      @default(now())
 
   @@map("payments")
+}
+
+model Ingredient {
+  id                String                 @id @default(uuid())
+  name              String                 @unique
+  unit              String
+  currentQuantity   Decimal                @default(0) @db.Decimal(14, 3)
+  lowStockThreshold Decimal                @default(0) @db.Decimal(14, 3)
+  version           Int                    @default(0) // Optimistic Locking (Task 10.3)
+  isActive          Boolean                @default(true)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  recipeItems       RecipeIngredient[]
+  orderUsages       OrderIngredientUsage[]
+  movements         InventoryMovement[]
+
+  @@map("ingredients")
+}
+
+model Recipe {
+  id            String             @id @default(uuid())
+  productId     String?
+  product       Product?           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  toppingId     String?
+  topping       Topping?           @relation(fields: [toppingId], references: [id], onDelete: Cascade)
+  size          String?
+  isProvisional Boolean            @default(false)
+  items         RecipeIngredient[]
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@unique([productId, size])
+  @@unique([toppingId])
+  @@map("recipes")
+}
+
+model RecipeIngredient {
+  recipeId     String
+  ingredientId String
+  quantity     Decimal    @db.Decimal(14, 3)
+  recipe       Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@id([recipeId, ingredientId])
+  @@map("recipe_ingredients")
+}
+
+model OrderIngredientUsage {
+  id           String     @id @default(uuid())
+  orderItemId  String
+  ingredientId String
+  quantity     Decimal    @db.Decimal(14, 3)
+  orderItem    OrderItem  @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@unique([orderItemId, ingredientId])
+  @@map("order_ingredient_usages")
+}
+
+model InventoryMovement {
+  id            String                @id @default(uuid())
+  ingredientId  String
+  type          InventoryMovementType
+  quantityDelta Decimal               @db.Decimal(14, 3)
+  note          String?
+  orderId       String?
+  actorId       String?
+  ingredient    Ingredient            @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+  order         Order?                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  actor         User?                 @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt     DateTime              @default(now())
+
+  @@unique([orderId, ingredientId, type])
+  @@index([ingredientId, createdAt])
+  @@map("inventory_movements")
 }

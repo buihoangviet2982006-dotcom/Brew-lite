@@ -18,7 +18,6 @@ export interface Product {
   name: string;
   price: number;
   imageUrl: string;
-  stock: number;
   description?: string;
   category?: 'coffee' | 'tea' | 'special' | 'bakery' | string;
   sizes?: ProductSizeItem[];
@@ -81,6 +80,6 @@ export interface User {
   id: string;
   email: string;
   fullName?: string;
-  role?: 'CUSTOMER' | 'BARISTA' | 'ADMIN';
+  role?: 'CUSTOMER' | 'BARISTA';
   loyaltyPoints: number;
 }

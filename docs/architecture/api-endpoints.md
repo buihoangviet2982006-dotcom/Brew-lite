@@ -39,12 +39,17 @@ Backend đọc giá sản phẩm, size và topping từ database, kiểm tra kh�
 ## 2. Thực Thể Dữ Liệu Tối Thiểu (Core Entities)
 
 1. **Product**
-   - `id`: UUID / Int (Khóa chính)
+   - `id`: UUID / String (Khóa chính)
    - `name`: String (Tên đồ uống: Cà phê sữa, Americano, ...)
    - `price`: Decimal (Giá cơ bản)
    - `imageUrl`: String (URL hình ảnh)
-   - `stock`: Int (Số lượng tồn kho nguyên liệu)
+   - `sizes`: JSON (Cấu hình giá theo size S, M, L)
    - `createdAt`: DateTime
+
+2. **Ingredient & Recipe (Quản lý tồn kho theo nguyên liệu & định lượng công thức)**
+   - `Ingredient`: `id`, `name`, `unit`, `currentQuantity` (Decimal), `version` (Int - Optimistic Locking)
+   - `Recipe` & `RecipeIngredient`: Định lượng nguyên liệu tiêu hao cho từng `Product` (theo `size`) và từng `Topping`
+   - `OrderIngredientUsage` & `InventoryMovement`: Lưu vết trừ/hoàn nguyên liệu theo từng đơn hàng (`ORDER_DEDUCTION`, `ORDER_REVERSAL`)
 
 2. **User**
    - `id`: UUID / Int (Khóa chính)

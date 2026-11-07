@@ -65,6 +65,12 @@ function LoginForm() {
       <h2 className="text-2xl font-extrabold text-brew-950 mb-1">Chào mừng trở lại</h2>
       <p className="text-sm text-brew-600 mb-6">Đăng nhập vào BrewLite để đặt món</p>
 
+      {redirectUrl.includes("/checkout") && (
+        <div className="mb-4 w-full max-w-sm rounded-xl border border-amber-200 bg-amber-50 p-3 text-center text-xs font-semibold text-amber-900 shadow-xs">
+          ☕ Bạn đang có món trong giỏ hàng. Vui lòng đăng nhập để hoàn tất thanh toán đơn hàng nhé!
+        </div>
+      )}
+
       <form onSubmit={handleLogin} className="w-full max-w-sm space-y-4">
         {error && (
           <div className="p-3 bg-red-50 border border-red-200 text-red-600 rounded-xl text-xs font-medium text-center">
